@@ -378,6 +378,7 @@ fn run_interactive_empty_cleanup(config: &LoadedConfig) -> Result<()> {
                 format_empty_removal_failure(failure.kind, &failure.path, &failure.error)
             );
         }
+        println!("提示：如果资源管理器正停在已删除的空文件夹里，请回到上层目录或按 F5 刷新。");
         write_journal(&path, &journal)?;
     } else {
         println!("已取消删除。");
