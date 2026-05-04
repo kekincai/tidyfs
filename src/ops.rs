@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, bail};
@@ -13,6 +14,26 @@ use walkdir::WalkDir;
 pub struct EmptyDirCandidate {
     pub path: PathBuf,
     pub ignored_files: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmptyRemovalResult {
+    pub deleted_dirs: Vec<PathBuf>,
+    pub removed_files: Vec<PathBuf>,
+    pub failures: Vec<EmptyRemovalFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmptyRemovalFailure {
+    pub path: PathBuf,
+    pub kind: EmptyRemovalFailureKind,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmptyRemovalFailureKind {
+    IgnoredFile,
+    EmptyDir,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,7 +140,7 @@ pub fn collect_empty_dirs_with_progress<F>(
     mut on_progress: F,
 ) -> Result<Vec<EmptyDirCandidate>>
 where
-    F: FnMut(ProgressEvent),
+    F: FnMut(ProgressEvent) + Send,
 {
     ensure_directory(root)?;
     let mut dirs = collect_dirs(root, &mut on_progress);
@@ -130,13 +151,23 @@ where
     let mut candidates = Vec::new();
 
     let total = dirs.len();
+    let current = AtomicUsize::new(0);
+    let progress = Mutex::new(&mut on_progress);
 
-    for (index, dir) in dirs.into_iter().enumerate() {
-        on_progress(ProgressEvent::Scan {
-            current: index + 1,
-            total,
-        });
-        let inspection = inspect_directory(&dir, options)?;
+    let inspections = dirs
+        .par_iter()
+        .map(|dir| -> Result<(PathBuf, DirectoryInspection)> {
+            let inspection = inspect_directory(dir, options)?;
+            let current = current.fetch_add(1, Ordering::Relaxed) + 1;
+            progress.lock().expect("scan progress mutex poisoned")(ProgressEvent::Scan {
+                current,
+                total,
+            });
+            Ok((dir.clone(), inspection))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    for (dir, inspection) in inspections {
         if inspection
             .child_dirs
             .iter()
@@ -155,17 +186,21 @@ where
 }
 
 pub fn remove_empty_dirs(candidates: &[EmptyDirCandidate]) -> Result<Vec<PathBuf>> {
-    remove_empty_dirs_with_progress(candidates, |_event| {})
+    Ok(remove_empty_dirs_with_progress(candidates, |_event| {})?.deleted_dirs)
 }
 
 pub fn remove_empty_dirs_with_progress<F>(
     candidates: &[EmptyDirCandidate],
     mut on_progress: F,
-) -> Result<Vec<PathBuf>>
+) -> Result<EmptyRemovalResult>
 where
     F: FnMut(ProgressEvent),
 {
-    let mut deleted = Vec::new();
+    let mut result = EmptyRemovalResult {
+        deleted_dirs: Vec::new(),
+        removed_files: Vec::new(),
+        failures: Vec::new(),
+    };
     let total = candidates.len();
 
     for (index, candidate) in candidates.iter().enumerate() {
@@ -173,19 +208,84 @@ where
             current: index + 1,
             total,
         });
+        let mut failed_before_dir = false;
         for ignored in &candidate.ignored_files {
             if ignored.exists() {
-                fs::remove_file(ignored).with_context(|| {
-                    format!("failed to remove ignored file {}", ignored.display())
-                })?;
+                match remove_file_allow_readonly(ignored) {
+                    Ok(()) => result.removed_files.push(ignored.clone()),
+                    Err(error) => {
+                        failed_before_dir = true;
+                        result.failures.push(EmptyRemovalFailure {
+                            path: ignored.clone(),
+                            kind: EmptyRemovalFailureKind::IgnoredFile,
+                            error: error.to_string(),
+                        });
+                    }
+                }
             }
         }
-        fs::remove_dir(&candidate.path)
-            .with_context(|| format!("failed to remove empty dir {}", candidate.path.display()))?;
-        deleted.push(candidate.path.clone());
+
+        if failed_before_dir {
+            continue;
+        }
+
+        match remove_dir_allow_readonly(&candidate.path) {
+            Ok(()) => result.deleted_dirs.push(candidate.path.clone()),
+            Err(error) => result.failures.push(EmptyRemovalFailure {
+                path: candidate.path.clone(),
+                kind: EmptyRemovalFailureKind::EmptyDir,
+                error: error.to_string(),
+            }),
+        }
     }
 
-    Ok(deleted)
+    Ok(result)
+}
+
+fn remove_file_allow_readonly(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            clear_readonly(path)?;
+            fs::remove_file(path)
+                .with_context(|| format!("failed to remove ignored file {}", path.display()))
+        }
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to remove ignored file {}", path.display()))
+        }
+    }
+}
+
+fn remove_dir_allow_readonly(path: &Path) -> Result<()> {
+    match fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            clear_readonly(path)?;
+            fs::remove_dir(path)
+                .with_context(|| format!("failed to remove empty dir {}", path.display()))
+        }
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to remove empty dir {}", path.display()))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn clear_readonly(path: &Path) -> Result<()> {
+    let metadata = fs::metadata(path)
+        .with_context(|| format!("failed to read permissions for {}", path.display()))?;
+    let mut permissions = metadata.permissions();
+    if permissions.readonly() {
+        permissions.set_readonly(false);
+        fs::set_permissions(path, permissions)
+            .with_context(|| format!("failed to update permissions for {}", path.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn clear_readonly(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 pub fn collect_flatten_plans(
@@ -887,6 +987,36 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(paths, vec![abc, root.join("a").join("b"), root.join("a"),]);
+    }
+
+    #[test]
+    fn remove_empty_dirs_reports_failures_and_keeps_going() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let not_empty = root.join("not_empty");
+        let empty = root.join("empty");
+        fs::create_dir_all(&not_empty).unwrap();
+        fs::create_dir_all(&empty).unwrap();
+        fs::write(not_empty.join("file.txt"), "still here").unwrap();
+
+        let candidates = vec![
+            EmptyDirCandidate {
+                path: not_empty.clone(),
+                ignored_files: Vec::new(),
+            },
+            EmptyDirCandidate {
+                path: empty.clone(),
+                ignored_files: Vec::new(),
+            },
+        ];
+
+        let result = remove_empty_dirs_with_progress(&candidates, |_event| {}).unwrap();
+
+        assert_eq!(result.deleted_dirs, vec![empty.clone()]);
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.failures[0].path, not_empty);
+        assert_eq!(result.failures[0].kind, EmptyRemovalFailureKind::EmptyDir);
+        assert!(!empty.exists());
     }
 
     #[test]

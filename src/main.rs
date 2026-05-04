@@ -10,8 +10,9 @@ use tidyfs::cli::{Cli, Command};
 use tidyfs::config::{LoadedConfig, load_config};
 use tidyfs::journal::Journal;
 use tidyfs::ops::{
-    ProgressEvent, collect_empty_dirs_with_progress, collect_flatten_plans_with_progress,
-    execute_flatten_plans_parallel_with_progress, remove_empty_dirs_with_progress,
+    EmptyRemovalFailureKind, ProgressEvent, collect_empty_dirs_with_progress,
+    collect_flatten_plans_with_progress, execute_flatten_plans_parallel_with_progress,
+    remove_empty_dirs_with_progress,
 };
 
 fn main() {
@@ -93,23 +94,33 @@ fn run_command(command: Command, config: &LoadedConfig) -> Result<()> {
             } else if args.apply {
                 let apply_progress = make_bar(candidates.len() as u64, "Removing empty folders...");
                 let mut journal = Journal::default();
-                for candidate in &candidates {
-                    for ignored in &candidate.ignored_files {
-                        emit(
-                            &mut log_lines,
-                            format!("[REMOVED-FILE] {}", ignored.display()),
-                        );
-                    }
-                }
-                for deleted in remove_empty_dirs_with_progress(&candidates, |event| {
+                let result = remove_empty_dirs_with_progress(&candidates, |event| {
                     update_progress(&apply_progress, event, "Removing empty folders");
-                })? {
+                })?;
+                for removed_file in &result.removed_files {
+                    emit(
+                        &mut log_lines,
+                        format!("[REMOVED-FILE] {}", removed_file.display()),
+                    );
+                }
+                let deleted_count = result.deleted_dirs.len();
+                for deleted in result.deleted_dirs {
                     emit(&mut log_lines, format!("[REMOVED] {}", deleted.display()));
                     journal.record_removed_dirs([deleted]);
                 }
+                for failure in &result.failures {
+                    emit(
+                        &mut log_lines,
+                        format_empty_removal_failure(failure.kind, &failure.path, &failure.error),
+                    );
+                }
                 finish_progress(
                     &apply_progress,
-                    format!("Finished removing {} empty folders", candidates.len()),
+                    format!(
+                        "Finished: {} removed, {} failed",
+                        deleted_count,
+                        result.failures.len()
+                    ),
                 );
                 write_journal(&path, &journal)?;
             } else {
@@ -342,14 +353,31 @@ fn run_interactive_empty_cleanup(config: &LoadedConfig) -> Result<()> {
     if confirm("现在删除这些空文件夹吗？[y/N]: ")? {
         let progress = make_bar(candidates.len() as u64, "正在删除空文件夹...");
         let mut journal = Journal::default();
-        let deleted = remove_empty_dirs_with_progress(&candidates, |event| {
+        let result = remove_empty_dirs_with_progress(&candidates, |event| {
             update_progress(&progress, event, "正在删除空文件夹");
         })?;
-        journal.record_removed_dirs(deleted.clone());
+        let deleted_count = result.deleted_dirs.len();
+        journal.record_removed_dirs(result.deleted_dirs.clone());
         finish_progress(
             &progress,
-            format!("删除完成：共删除 {} 个空文件夹", deleted.len()),
+            format!(
+                "删除完成：成功 {} 个，失败 {} 个",
+                deleted_count,
+                result.failures.len()
+            ),
         );
+        for removed_file in &result.removed_files {
+            println!("[已删除文件] {}", removed_file.display());
+        }
+        for deleted in &result.deleted_dirs {
+            println!("[已删除] {}", deleted.display());
+        }
+        for failure in &result.failures {
+            println!(
+                "{}",
+                format_empty_removal_failure(failure.kind, &failure.path, &failure.error)
+            );
+        }
         write_journal(&path, &journal)?;
     } else {
         println!("已取消删除。");
@@ -483,6 +511,17 @@ fn write_journal(root: &Path, journal: &Journal) -> Result<()> {
         println!("[JOURNAL] {}", path.display());
     }
     Ok(())
+}
+
+fn format_empty_removal_failure(kind: EmptyRemovalFailureKind, path: &Path, error: &str) -> String {
+    match kind {
+        EmptyRemovalFailureKind::IgnoredFile => {
+            format!("[FAILED-FILE] {} | {}", path.display(), error)
+        }
+        EmptyRemovalFailureKind::EmptyDir => {
+            format!("[FAILED] {} | {}", path.display(), error)
+        }
+    }
 }
 
 fn pause_console(message: &str) {
