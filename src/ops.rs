@@ -583,6 +583,7 @@ fn analyze_keep_endpoints_parallel(
     if is_likely_date_dir(start) {
         collect_date_anchor_flatten_plans(options, &start_inspection, &mut plans)?;
         preserve_parallel_leaf_dirs(&mut plans);
+        remove_noop_flatten_plans(&mut plans);
         return Ok(plans);
     }
 
@@ -590,6 +591,7 @@ fn analyze_keep_endpoints_parallel(
         collect_selected_first_level_flatten_plans(start, options, &start_inspection, &mut plans)?;
         if !plans.is_empty() {
             preserve_parallel_leaf_dirs(&mut plans);
+            remove_noop_flatten_plans(&mut plans);
             return Ok(plans);
         }
     }
@@ -614,8 +616,13 @@ fn analyze_keep_endpoints_parallel(
     }
 
     preserve_parallel_leaf_dirs(&mut plans);
+    remove_noop_flatten_plans(&mut plans);
 
     Ok(plans)
+}
+
+fn remove_noop_flatten_plans(plans: &mut Vec<FlattenPlan>) {
+    plans.retain(|plan| plan.target_dir != plan.deepest_dir);
 }
 
 fn preserve_parallel_leaf_dirs(plans: &mut [FlattenPlan]) {
@@ -1244,6 +1251,23 @@ mod tests {
         assert!(selected.join("p").join("p.jpg").exists());
         assert!(selected.join("v").join("v.mp4").exists());
         assert!(!selected.join("project_alpha_copy").exists());
+    }
+
+    #[test]
+    fn keep_endpoints_mode_skips_already_flat_parallel_leaf_folders() {
+        let temp = tempdir().unwrap();
+        let date = temp.path().join("20250203");
+        let first_level = date.join("project_alpha");
+        fs::create_dir_all(first_level.join("p")).unwrap();
+        fs::create_dir_all(first_level.join("v")).unwrap();
+        fs::write(first_level.join("p").join("p.jpg"), "p").unwrap();
+        fs::write(first_level.join("v").join("v.mp4"), "v").unwrap();
+
+        let plans =
+            collect_flatten_plans(&date, &ScanOptions::default(), FlattenMode::KeepEndpoints)
+                .unwrap();
+
+        assert!(plans.is_empty());
     }
 
     #[test]
