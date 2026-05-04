@@ -475,7 +475,7 @@ fn preserve_parallel_leaf_dirs(plans: &mut [FlattenPlan]) {
             continue;
         };
 
-        plan.target_dir = unique_dir_destination(&plan.root, &leaf_name);
+        plan.target_dir = plan.root.join(leaf_name);
         plan.keep_last_dir = true;
     }
 }
@@ -992,6 +992,39 @@ mod tests {
         assert!(selected.join("v").join("v.mp4").exists());
         assert!(selected.join("p").join("p.jpg").exists());
         assert!(!selected.join("project_alpha_copy").exists());
+    }
+
+    #[test]
+    fn keep_endpoints_mode_reuses_existing_parallel_leaf_folder() {
+        let temp = tempdir().unwrap();
+        let selected = temp.path().join("project_alpha");
+        let shell = selected.join("project_alpha_copy").join("578").join("view");
+        let p = shell.join("p");
+        let v = shell.join("v");
+        fs::create_dir_all(&p).unwrap();
+        fs::create_dir_all(&v).unwrap();
+        fs::create_dir_all(selected.join("p")).unwrap();
+        fs::write(p.join("p.jpg"), "p").unwrap();
+        fs::write(v.join("v.mp4"), "v").unwrap();
+
+        let mut plans = collect_flatten_plans(
+            &selected,
+            &ScanOptions::default(),
+            FlattenMode::KeepEndpoints,
+        )
+        .unwrap();
+        plans.sort_by_key(|plan| plan.deepest_dir.clone());
+
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0].target_dir, selected.join("p"));
+        assert_eq!(plans[1].target_dir, selected.join("v"));
+
+        execute_flatten_plan(&plans[0]).unwrap();
+        execute_flatten_plan(&plans[1]).unwrap();
+
+        assert!(selected.join("p").join("p.jpg").exists());
+        assert!(selected.join("v").join("v.mp4").exists());
+        assert!(!selected.join("p (1)").exists());
     }
 
     #[test]
