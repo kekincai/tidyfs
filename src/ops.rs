@@ -436,6 +436,10 @@ fn analyze_keep_endpoints(start: &Path, options: &ScanOptions) -> Result<Vec<Fla
         collect_date_anchor_flatten_plans(options, &anchor_inspection, &mut plans)?;
     }
 
+    if plans.is_empty() {
+        collect_date_anchor_flatten_plans(options, &start_inspection, &mut plans)?;
+    }
+
     Ok(plans)
 }
 
@@ -843,6 +847,27 @@ mod tests {
 
         assert!(anchor.join("already-here.txt").exists());
         assert!(anchor.join("project_alpha").join("video.mp4").exists());
+        assert!(!anchor.join("project_alpha").join("archive_shell").exists());
+    }
+
+    #[test]
+    fn keep_endpoints_mode_can_scan_selected_date_folder_directly() {
+        let temp = tempdir().unwrap();
+        let anchor = temp.path().join("20250203");
+        let leaf = anchor.join("project_alpha").join("archive_shell");
+        fs::create_dir_all(&leaf).unwrap();
+        fs::write(leaf.join("clip.mp4"), "clip").unwrap();
+
+        let mut plans =
+            collect_flatten_plans(&anchor, &ScanOptions::default(), FlattenMode::KeepEndpoints)
+                .unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].root, anchor.join("project_alpha"));
+        assert_eq!(plans[0].target_dir, anchor.join("project_alpha"));
+
+        execute_flatten_plan(&plans.remove(0)).unwrap();
+
+        assert!(anchor.join("project_alpha").join("clip.mp4").exists());
         assert!(!anchor.join("project_alpha").join("archive_shell").exists());
     }
 
