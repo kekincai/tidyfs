@@ -2,8 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, bail};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
@@ -216,7 +218,7 @@ where
                 total,
             });
         }
-        return analyze_keep_endpoints(root, options);
+        return analyze_keep_endpoints_parallel(root, options);
     }
 
     let mut covered = HashSet::new();
@@ -347,6 +349,148 @@ where
     })
 }
 
+pub fn execute_flatten_plans_parallel_with_progress<F>(
+    plans: &[FlattenPlan],
+    on_progress: F,
+) -> Result<Vec<FlattenResult>>
+where
+    F: Fn(ProgressEvent) + Sync,
+{
+    let total = plans
+        .iter()
+        .map(|plan| plan.files.len() + plan.ignored_files.len() + plan.removed_dirs.len())
+        .sum::<usize>();
+    let current = AtomicUsize::new(0);
+    let bump = || {
+        let next = current.fetch_add(1, Ordering::Relaxed) + 1;
+        on_progress(ProgressEvent::Apply {
+            current: next,
+            total,
+        });
+    };
+
+    let mut results = plans
+        .iter()
+        .map(|_| FlattenResult {
+            moves: Vec::new(),
+            removed_files: Vec::new(),
+            removed_dirs: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+
+    let mut move_groups: HashMap<PathBuf, Vec<(usize, PathBuf)>> = HashMap::new();
+    for (plan_index, plan) in plans.iter().enumerate() {
+        for source in &plan.files {
+            move_groups
+                .entry(plan.target_dir.clone())
+                .or_default()
+                .push((plan_index, source.clone()));
+        }
+    }
+
+    let moved_groups = move_groups
+        .into_par_iter()
+        .map(
+            |(target_dir, sources)| -> Result<Vec<(usize, MoveAction)>> {
+                fs::create_dir_all(&target_dir).with_context(|| {
+                    format!("failed to create destination dir {}", target_dir.display())
+                })?;
+
+                let mut moves = Vec::new();
+                for (plan_index, source) in sources {
+                    let file_name = source
+                        .file_name()
+                        .map(OsString::from)
+                        .with_context(|| format!("missing file name for {}", source.display()))?;
+                    let destination = unique_destination(&target_dir, &file_name);
+
+                    fs::rename(&source, &destination).with_context(|| {
+                        format!(
+                            "failed to move {} to {}",
+                            source.display(),
+                            destination.display()
+                        )
+                    })?;
+                    bump();
+
+                    moves.push((
+                        plan_index,
+                        MoveAction {
+                            from: source,
+                            to: destination,
+                        },
+                    ));
+                }
+
+                Ok(moves)
+            },
+        )
+        .collect::<Result<Vec<_>>>()?;
+
+    for moved_group in moved_groups {
+        for (plan_index, action) in moved_group {
+            results[plan_index].moves.push(action);
+        }
+    }
+
+    let ignored_files = plans
+        .iter()
+        .enumerate()
+        .flat_map(|(plan_index, plan)| {
+            plan.ignored_files
+                .iter()
+                .cloned()
+                .map(move |path| (plan_index, path))
+        })
+        .collect::<Vec<_>>();
+
+    let removed_ignored = ignored_files
+        .into_par_iter()
+        .map(
+            |(plan_index, ignored)| -> Result<Option<(usize, PathBuf)>> {
+                let removed = if ignored.exists() {
+                    fs::remove_file(&ignored).with_context(|| {
+                        format!("failed to remove ignored file {}", ignored.display())
+                    })?;
+                    Some((plan_index, ignored))
+                } else {
+                    None
+                };
+                bump();
+                Ok(removed)
+            },
+        )
+        .collect::<Result<Vec<_>>>()?;
+
+    for removed in removed_ignored.into_iter().flatten() {
+        results[removed.0].removed_files.push(removed.1);
+    }
+
+    let mut dir_owner = HashMap::new();
+    let mut removed_dirs = Vec::new();
+    for (plan_index, plan) in plans.iter().enumerate() {
+        for dir in &plan.removed_dirs {
+            dir_owner.entry(dir.clone()).or_insert(plan_index);
+            removed_dirs.push(dir.clone());
+        }
+    }
+    removed_dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    removed_dirs.dedup();
+
+    for dir in removed_dirs {
+        if dir.exists() && is_directory_empty(&dir)? {
+            fs::remove_dir(&dir)
+                .with_context(|| format!("failed to remove emptied dir {}", dir.display()))?;
+            if let Some(plan_index) = dir_owner.get(&dir) {
+                results[*plan_index].removed_dirs.push(dir);
+            }
+        }
+        bump();
+    }
+
+    Ok(results)
+}
+
 fn analyze_chain(
     start: &Path,
     options: &ScanOptions,
@@ -429,7 +573,10 @@ fn analyze_chain(
     }
 }
 
-fn analyze_keep_endpoints(start: &Path, options: &ScanOptions) -> Result<Vec<FlattenPlan>> {
+fn analyze_keep_endpoints_parallel(
+    start: &Path,
+    options: &ScanOptions,
+) -> Result<Vec<FlattenPlan>> {
     let start_inspection = inspect_directory(start, options)?;
     let mut plans = Vec::new();
 
@@ -447,9 +594,19 @@ fn analyze_keep_endpoints(start: &Path, options: &ScanOptions) -> Result<Vec<Fla
         }
     }
 
-    for anchor in &start_inspection.child_dirs {
-        let anchor_inspection = inspect_directory(&anchor, options)?;
-        collect_date_anchor_flatten_plans(options, &anchor_inspection, &mut plans)?;
+    let per_anchor = start_inspection
+        .child_dirs
+        .par_iter()
+        .map(|anchor| -> Result<Vec<FlattenPlan>> {
+            let anchor_inspection = inspect_directory(anchor, options)?;
+            let mut anchor_plans = Vec::new();
+            collect_date_anchor_flatten_plans(options, &anchor_inspection, &mut anchor_plans)?;
+            Ok(anchor_plans)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    for anchor_plans in per_anchor {
+        plans.extend(anchor_plans);
     }
 
     if plans.is_empty() {
@@ -1055,6 +1212,38 @@ mod tests {
         assert!(selected.join("p").join("p.jpg").exists());
         assert!(selected.join("v").join("v.mp4").exists());
         assert!(!selected.join("p (1)").exists());
+    }
+
+    #[test]
+    fn parallel_flatten_execution_moves_to_multiple_targets_safely() {
+        let temp = tempdir().unwrap();
+        let selected = temp.path().join("project_alpha");
+        let shell = selected.join("project_alpha_copy").join("578").join("view");
+        let p = shell.join("p");
+        let v = shell.join("v");
+        fs::create_dir_all(&p).unwrap();
+        fs::create_dir_all(&v).unwrap();
+        fs::write(p.join("p.jpg"), "p").unwrap();
+        fs::write(v.join("v.mp4"), "v").unwrap();
+
+        let mut plans = collect_flatten_plans(
+            &selected,
+            &ScanOptions::default(),
+            FlattenMode::KeepEndpoints,
+        )
+        .unwrap();
+        plans.sort_by_key(|plan| plan.deepest_dir.clone());
+
+        let results = execute_flatten_plans_parallel_with_progress(&plans, |_event| {}).unwrap();
+        let moved_count = results
+            .iter()
+            .map(|result| result.moves.len())
+            .sum::<usize>();
+
+        assert_eq!(moved_count, 2);
+        assert!(selected.join("p").join("p.jpg").exists());
+        assert!(selected.join("v").join("v.mp4").exists());
+        assert!(!selected.join("project_alpha_copy").exists());
     }
 
     #[test]

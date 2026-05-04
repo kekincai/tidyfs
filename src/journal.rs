@@ -54,6 +54,37 @@ impl Journal {
         );
     }
 
+    pub fn record_flatten_results_ordered(&mut self, results: &[FlattenResult]) {
+        for result in results {
+            self.entries.extend(
+                result
+                    .moves
+                    .iter()
+                    .cloned()
+                    .map(|MoveAction { from, to }| JournalEntry::Move { from, to }),
+            );
+        }
+        for result in results {
+            self.entries.extend(
+                result
+                    .removed_files
+                    .iter()
+                    .cloned()
+                    .map(|path| JournalEntry::RemoveFile { path }),
+            );
+        }
+        let mut removed_dirs = results
+            .iter()
+            .flat_map(|result| result.removed_dirs.iter().cloned())
+            .collect::<Vec<_>>();
+        removed_dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+        self.entries.extend(
+            removed_dirs
+                .into_iter()
+                .map(|path| JournalEntry::RemoveDir { path }),
+        );
+    }
+
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

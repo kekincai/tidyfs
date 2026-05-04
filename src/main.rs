@@ -11,7 +11,7 @@ use tidyfs::config::{LoadedConfig, load_config};
 use tidyfs::journal::Journal;
 use tidyfs::ops::{
     ProgressEvent, collect_empty_dirs_with_progress, collect_flatten_plans_with_progress,
-    execute_flatten_plan_with_progress, remove_empty_dirs_with_progress,
+    execute_flatten_plans_parallel_with_progress, remove_empty_dirs_with_progress,
 };
 
 fn main() {
@@ -191,10 +191,9 @@ fn run_command(command: Command, config: &LoadedConfig) -> Result<()> {
                     .sum::<usize>();
                 let chain_count = plans.len();
                 let apply_progress = make_bar(total_steps as u64, "Applying flatten operations...");
-                let mut finished_steps = 0u64;
                 let mut journal = Journal::default();
 
-                for plan in plans {
+                for plan in &plans {
                     emit(
                         &mut log_lines,
                         format!(
@@ -203,41 +202,45 @@ fn run_command(command: Command, config: &LoadedConfig) -> Result<()> {
                             plan.target_dir.display()
                         ),
                     );
-                    let plan_steps = (plan.files.len()
-                        + plan.ignored_files.len()
-                        + plan.removed_dirs.len()) as u64;
-                    let result = execute_flatten_plan_with_progress(&plan, |event| {
-                        if let ProgressEvent::Apply { current, .. } = event {
-                            apply_progress.set_position(finished_steps + current as u64);
-                            apply_progress.set_message(format!(
-                                "Applying flatten operations ({}/{})",
-                                finished_steps + current as u64,
-                                total_steps
-                            ));
-                        }
-                    })?;
-                    finished_steps += plan_steps;
-                    journal.record_flatten_result(&result);
+                }
 
-                    for moved in result.moves {
+                let results = execute_flatten_plans_parallel_with_progress(&plans, |event| {
+                    if let ProgressEvent::Apply { current, total } = event {
+                        apply_progress.set_position(current as u64);
+                        apply_progress.set_message(format!(
+                            "Applying flatten operations ({current}/{total})"
+                        ));
+                    }
+                })?;
+
+                journal.record_flatten_results_ordered(&results);
+                for result in &results {
+                    for moved in &result.moves {
                         emit(
                             &mut log_lines,
                             format!("[MOVED] {} -> {}", moved.from.display(), moved.to.display()),
                         );
                     }
-                    for file in result.removed_files {
+                }
+                for result in &results {
+                    for file in &result.removed_files {
                         emit(&mut log_lines, format!("[REMOVED-FILE] {}", file.display()));
                     }
-                    for dir in result.removed_dirs {
-                        emit(&mut log_lines, format!("[REMOVED] {}", dir.display()));
-                    }
+                }
+                let mut removed_dirs = results
+                    .into_iter()
+                    .flat_map(|result| result.removed_dirs)
+                    .collect::<Vec<_>>();
+                removed_dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+                for dir in removed_dirs {
+                    emit(&mut log_lines, format!("[REMOVED] {}", dir.display()));
                 }
 
                 finish_progress(
                     &apply_progress,
                     format!(
                         "Finished flattening {} chains in {} steps",
-                        chain_count, finished_steps
+                        chain_count, total_steps
                     ),
                 );
                 write_journal(&path, &journal)?;
@@ -379,31 +382,22 @@ fn run_interactive_flatten(config: &LoadedConfig) -> Result<()> {
             .map(|plan| plan.files.len() + plan.ignored_files.len() + plan.removed_dirs.len())
             .sum::<usize>();
         let progress = make_bar(total_steps as u64, "正在执行拉平操作...");
-        let mut finished_steps = 0u64;
         let mut journal = Journal::default();
 
-        for plan in plans {
-            let plan_steps =
-                (plan.files.len() + plan.ignored_files.len() + plan.removed_dirs.len()) as u64;
-            let result = execute_flatten_plan_with_progress(&plan, |event| {
-                if let ProgressEvent::Apply { current, .. } = event {
-                    progress.set_position(finished_steps + current as u64);
-                    progress.set_message(format!(
-                        "正在执行拉平操作 ({}/{})",
-                        finished_steps + current as u64,
-                        total_steps
-                    ));
-                }
-            })?;
-            journal.record_flatten_result(&result);
-            finished_steps += plan_steps;
-        }
+        let results = execute_flatten_plans_parallel_with_progress(&plans, |event| {
+            if let ProgressEvent::Apply { current, total } = event {
+                progress.set_position(current as u64);
+                progress.set_message(format!("正在执行拉平操作 ({current}/{total})"));
+            }
+        })?;
+
+        journal.record_flatten_results_ordered(&results);
 
         finish_progress(
             &progress,
             format!(
                 "拉平完成：共处理 {} 组目录，执行 {} 步",
-                chain_count, finished_steps
+                chain_count, total_steps
             ),
         );
         write_journal(&path, &journal)?;
