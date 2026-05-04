@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -436,6 +436,7 @@ fn analyze_keep_endpoints(start: &Path, options: &ScanOptions) -> Result<Vec<Fla
     if should_treat_selected_dir_as_first_level(start, &start_inspection) {
         collect_selected_first_level_flatten_plans(start, options, &start_inspection, &mut plans)?;
         if !plans.is_empty() {
+            preserve_parallel_leaf_dirs(&mut plans);
             return Ok(plans);
         }
     }
@@ -449,7 +450,34 @@ fn analyze_keep_endpoints(start: &Path, options: &ScanOptions) -> Result<Vec<Fla
         collect_date_anchor_flatten_plans(options, &start_inspection, &mut plans)?;
     }
 
+    preserve_parallel_leaf_dirs(&mut plans);
+
     Ok(plans)
+}
+
+fn preserve_parallel_leaf_dirs(plans: &mut [FlattenPlan]) {
+    let mut sibling_counts: HashMap<PathBuf, usize> = HashMap::new();
+
+    for plan in plans.iter() {
+        if let Some(parent) = plan.deepest_dir.parent() {
+            *sibling_counts.entry(parent.to_path_buf()).or_default() += 1;
+        }
+    }
+
+    for plan in plans {
+        let Some(parent) = plan.deepest_dir.parent() else {
+            continue;
+        };
+        if sibling_counts.get(parent).copied().unwrap_or_default() < 2 {
+            continue;
+        }
+        let Some(leaf_name) = plan.deepest_dir.file_name().map(OsString::from) else {
+            continue;
+        };
+
+        plan.target_dir = unique_dir_destination(&plan.root, &leaf_name);
+        plan.keep_last_dir = true;
+    }
 }
 
 fn should_treat_selected_dir_as_first_level(
@@ -845,14 +873,16 @@ mod tests {
         plans.sort_by_key(|plan| plan.deepest_dir.clone());
 
         assert_eq!(plans.len(), 2);
-        assert_eq!(plans[0].target_dir, anchor);
-        assert_eq!(plans[1].target_dir, anchor);
+        assert_eq!(plans[0].target_dir, anchor.join("c"));
+        assert_eq!(plans[1].target_dir, anchor.join("d"));
+        assert!(plans[0].keep_last_dir);
+        assert!(plans[1].keep_last_dir);
 
         execute_flatten_plan(&plans[0]).unwrap();
         execute_flatten_plan(&plans[1]).unwrap();
 
-        assert!(anchor.join("c.txt").exists());
-        assert!(anchor.join("d.txt").exists());
+        assert!(anchor.join("c").join("c.txt").exists());
+        assert!(anchor.join("d").join("d.txt").exists());
         assert!(!anchor.join("keep").exists());
     }
 
@@ -951,14 +981,16 @@ mod tests {
         plans.sort_by_key(|plan| plan.deepest_dir.clone());
 
         assert_eq!(plans.len(), 2);
-        assert_eq!(plans[0].target_dir, selected);
-        assert_eq!(plans[1].target_dir, selected);
+        assert_eq!(plans[0].target_dir, selected.join("p"));
+        assert_eq!(plans[1].target_dir, selected.join("v"));
+        assert!(plans[0].keep_last_dir);
+        assert!(plans[1].keep_last_dir);
 
         execute_flatten_plan(&plans[0]).unwrap();
         execute_flatten_plan(&plans[1]).unwrap();
 
-        assert!(selected.join("v.mp4").exists());
-        assert!(selected.join("p.jpg").exists());
+        assert!(selected.join("v").join("v.mp4").exists());
+        assert!(selected.join("p").join("p.jpg").exists());
         assert!(!selected.join("project_alpha_copy").exists());
     }
 
