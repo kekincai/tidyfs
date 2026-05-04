@@ -477,7 +477,7 @@ fn preserve_parallel_leaf_dirs(plans: &mut [FlattenPlan]) {
         if sibling_counts.get(parent).copied().unwrap_or_default() < 2 {
             continue;
         }
-        let Some(leaf_name) = plan.deepest_dir.file_name().map(normalized_leaf_dir_name) else {
+        let Some(leaf_name) = plan.deepest_dir.file_name().map(OsString::from) else {
             continue;
         };
 
@@ -593,30 +593,6 @@ fn is_likely_date_dir(path: &Path) -> bool {
                 && name.starts_with("20")
                 && name.chars().all(|character| character.is_ascii_digit())
         })
-}
-
-fn normalized_leaf_dir_name(name: &std::ffi::OsStr) -> OsString {
-    let text = name.to_string_lossy();
-    if let Some(base) = strip_copy_suffix(&text) {
-        return OsString::from(base);
-    }
-
-    OsString::from(name)
-}
-
-fn strip_copy_suffix(name: &str) -> Option<&str> {
-    let suffix_start = name.rfind(" (")?;
-    if !name.ends_with(')') {
-        return None;
-    }
-
-    let number = &name[suffix_start + 2..name.len() - 1];
-    if number.is_empty() || !number.chars().all(|character| character.is_ascii_digit()) {
-        return None;
-    }
-
-    let base = &name[..suffix_start];
-    if base.is_empty() { None } else { Some(base) }
 }
 
 fn ensure_directory(path: &Path) -> Result<()> {
@@ -1082,7 +1058,7 @@ mod tests {
     }
 
     #[test]
-    fn keep_endpoints_mode_normalizes_copied_parallel_leaf_folder_names() {
+    fn keep_endpoints_mode_preserves_copied_parallel_leaf_folder_names() {
         let temp = tempdir().unwrap();
         let date = temp.path().join("20250203");
         let shell = date.join("project_alpha").join("long_title_shell");
@@ -1099,15 +1075,30 @@ mod tests {
         plans.sort_by_key(|plan| plan.deepest_dir.clone());
 
         assert_eq!(plans.len(), 2);
-        assert_eq!(plans[0].target_dir, date.join("project_alpha").join("p"));
-        assert_eq!(plans[1].target_dir, date.join("project_alpha").join("v"));
+        assert_eq!(
+            plans[0].target_dir,
+            date.join("project_alpha").join("p (1)")
+        );
+        assert_eq!(
+            plans[1].target_dir,
+            date.join("project_alpha").join("v (1)")
+        );
 
         execute_flatten_plan(&plans[0]).unwrap();
         execute_flatten_plan(&plans[1]).unwrap();
 
-        assert!(date.join("project_alpha").join("p").join("p.jpg").exists());
-        assert!(date.join("project_alpha").join("v").join("v.mp4").exists());
-        assert!(!date.join("project_alpha").join("p (1)").exists());
+        assert!(
+            date.join("project_alpha")
+                .join("p (1)")
+                .join("p.jpg")
+                .exists()
+        );
+        assert!(
+            date.join("project_alpha")
+                .join("v (1)")
+                .join("v.mp4")
+                .exists()
+        );
         assert!(!date.join("project_alpha").join("long_title_shell").exists());
     }
 
