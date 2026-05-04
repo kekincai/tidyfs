@@ -285,6 +285,7 @@ where
 {
     let mut moves = Vec::new();
     let mut removed_files = Vec::new();
+    let mut removed_dirs = Vec::new();
     let total = plan.files.len() + plan.ignored_files.len() + plan.removed_dirs.len();
     let mut current = 0;
 
@@ -335,13 +336,14 @@ where
         if dir.exists() && is_directory_empty(dir)? {
             fs::remove_dir(dir)
                 .with_context(|| format!("failed to remove emptied dir {}", dir.display()))?;
+            removed_dirs.push(dir.clone());
         }
     }
 
     Ok(FlattenResult {
         moves,
         removed_files,
-        removed_dirs: plan.removed_dirs.clone(),
+        removed_dirs,
     })
 }
 
@@ -431,6 +433,13 @@ fn analyze_keep_endpoints(start: &Path, options: &ScanOptions) -> Result<Vec<Fla
     let start_inspection = inspect_directory(start, options)?;
     let mut plans = Vec::new();
 
+    if should_treat_selected_dir_as_first_level(start, &start_inspection) {
+        collect_selected_first_level_flatten_plans(start, options, &start_inspection, &mut plans)?;
+        if !plans.is_empty() {
+            return Ok(plans);
+        }
+    }
+
     for anchor in &start_inspection.child_dirs {
         let anchor_inspection = inspect_directory(&anchor, options)?;
         collect_date_anchor_flatten_plans(options, &anchor_inspection, &mut plans)?;
@@ -441,6 +450,36 @@ fn analyze_keep_endpoints(start: &Path, options: &ScanOptions) -> Result<Vec<Fla
     }
 
     Ok(plans)
+}
+
+fn should_treat_selected_dir_as_first_level(
+    start: &Path,
+    inspection: &DirectoryInspection,
+) -> bool {
+    if is_likely_date_dir(start) {
+        return false;
+    }
+
+    !inspection
+        .child_dirs
+        .iter()
+        .any(|child| is_likely_date_dir(child))
+}
+
+fn collect_selected_first_level_flatten_plans(
+    root: &Path,
+    options: &ScanOptions,
+    inspection: &DirectoryInspection,
+    plans: &mut Vec<FlattenPlan>,
+) -> Result<()> {
+    let mut ignored_files = inspection.ignored_files.clone();
+
+    for child in &inspection.child_dirs {
+        let mut chain = vec![root.to_path_buf(), child.clone()];
+        collect_keep_endpoint_leaves(root, options, &mut chain, &mut ignored_files, plans)?;
+    }
+
+    Ok(())
 }
 
 fn collect_date_anchor_flatten_plans(
@@ -510,6 +549,16 @@ fn collect_keep_endpoint_leaves(
 
     inherited_ignored_files.truncate(inherited_len);
     Ok(())
+}
+
+fn is_likely_date_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.len() == 8
+                && name.starts_with("20")
+                && name.chars().all(|character| character.is_ascii_digit())
+        })
 }
 
 fn ensure_directory(path: &Path) -> Result<()> {
@@ -757,7 +806,7 @@ mod tests {
     fn keep_endpoints_mode_keeps_first_folder_inside_date_anchor() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        let anchor = root.join("a");
+        let anchor = root.join("20250203").join("a");
         let deep = anchor.join("b").join("c");
         fs::create_dir_all(&deep).unwrap();
         fs::write(deep.join("x.txt"), "x").unwrap();
@@ -768,18 +817,21 @@ mod tests {
         assert_eq!(plans.len(), 1);
 
         let plan = &plans[0];
-        assert_eq!(plan.root, anchor.join("b"));
+        assert_eq!(plan.root, anchor);
         assert_eq!(plan.deepest_dir, anchor.join("b").join("c"));
-        assert_eq!(plan.target_dir, anchor.join("b"));
+        assert_eq!(plan.target_dir, anchor);
         assert!(!plan.keep_last_dir);
-        assert_eq!(plan.removed_dirs, vec![anchor.join("b").join("c")]);
+        assert_eq!(
+            plan.removed_dirs,
+            vec![anchor.join("b").join("c"), anchor.join("b")]
+        );
     }
 
     #[test]
     fn keep_endpoints_mode_removes_shared_middle_folder_for_multiple_leaves() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        let anchor = root.join("a");
+        let anchor = root.join("20250203").join("a");
         let c = anchor.join("keep").join("b").join("c");
         let d = anchor.join("keep").join("b").join("d");
         fs::create_dir_all(&c).unwrap();
@@ -793,22 +845,22 @@ mod tests {
         plans.sort_by_key(|plan| plan.deepest_dir.clone());
 
         assert_eq!(plans.len(), 2);
-        assert_eq!(plans[0].target_dir, anchor.join("keep"));
-        assert_eq!(plans[1].target_dir, anchor.join("keep"));
+        assert_eq!(plans[0].target_dir, anchor);
+        assert_eq!(plans[1].target_dir, anchor);
 
         execute_flatten_plan(&plans[0]).unwrap();
         execute_flatten_plan(&plans[1]).unwrap();
 
-        assert!(anchor.join("keep").join("c.txt").exists());
-        assert!(anchor.join("keep").join("d.txt").exists());
-        assert!(!anchor.join("keep").join("b").exists());
+        assert!(anchor.join("c.txt").exists());
+        assert!(anchor.join("d.txt").exists());
+        assert!(!anchor.join("keep").exists());
     }
 
     #[test]
     fn keep_endpoints_mode_removes_all_middle_layers() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        let anchor = root.join("a");
+        let anchor = root.join("20250203").join("a");
         let deep = anchor.join("keep").join("b").join("x").join("y").join("c");
         fs::create_dir_all(&deep).unwrap();
         fs::write(deep.join("photo.jpg"), "photo").unwrap();
@@ -817,12 +869,12 @@ mod tests {
             collect_flatten_plans(root, &ScanOptions::default(), FlattenMode::KeepEndpoints)
                 .unwrap();
         assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].target_dir, anchor.join("keep"));
+        assert_eq!(plans[0].target_dir, anchor);
 
         execute_flatten_plan(&plans.remove(0)).unwrap();
 
-        assert!(anchor.join("keep").join("photo.jpg").exists());
-        assert!(!anchor.join("keep").join("b").exists());
+        assert!(anchor.join("photo.jpg").exists());
+        assert!(!anchor.join("keep").exists());
     }
 
     #[test]
@@ -869,6 +921,45 @@ mod tests {
 
         assert!(anchor.join("project_alpha").join("clip.mp4").exists());
         assert!(!anchor.join("project_alpha").join("archive_shell").exists());
+    }
+
+    #[test]
+    fn keep_endpoints_mode_can_scan_selected_first_level_folder_directly() {
+        let temp = tempdir().unwrap();
+        let selected = temp.path().join("project_alpha");
+        let v = selected
+            .join("project_alpha_copy")
+            .join("578")
+            .join("view")
+            .join("v");
+        let p = selected
+            .join("project_alpha_copy")
+            .join("578")
+            .join("view")
+            .join("p");
+        fs::create_dir_all(&v).unwrap();
+        fs::create_dir_all(&p).unwrap();
+        fs::write(v.join("v.mp4"), "v").unwrap();
+        fs::write(p.join("p.jpg"), "p").unwrap();
+
+        let mut plans = collect_flatten_plans(
+            &selected,
+            &ScanOptions::default(),
+            FlattenMode::KeepEndpoints,
+        )
+        .unwrap();
+        plans.sort_by_key(|plan| plan.deepest_dir.clone());
+
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0].target_dir, selected);
+        assert_eq!(plans[1].target_dir, selected);
+
+        execute_flatten_plan(&plans[0]).unwrap();
+        execute_flatten_plan(&plans[1]).unwrap();
+
+        assert!(selected.join("v.mp4").exists());
+        assert!(selected.join("p.jpg").exists());
+        assert!(!selected.join("project_alpha_copy").exists());
     }
 
     #[test]
