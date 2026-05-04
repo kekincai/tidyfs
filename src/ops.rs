@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, bail};
@@ -140,7 +139,7 @@ pub fn collect_empty_dirs_with_progress<F>(
     mut on_progress: F,
 ) -> Result<Vec<EmptyDirCandidate>>
 where
-    F: FnMut(ProgressEvent) + Send,
+    F: FnMut(ProgressEvent),
 {
     ensure_directory(root)?;
     let mut dirs = collect_dirs(root, &mut on_progress);
@@ -151,23 +150,13 @@ where
     let mut candidates = Vec::new();
 
     let total = dirs.len();
-    let current = AtomicUsize::new(0);
-    let progress = Mutex::new(&mut on_progress);
 
-    let inspections = dirs
-        .par_iter()
-        .map(|dir| -> Result<(PathBuf, DirectoryInspection)> {
-            let inspection = inspect_directory(dir, options)?;
-            let current = current.fetch_add(1, Ordering::Relaxed) + 1;
-            progress.lock().expect("scan progress mutex poisoned")(ProgressEvent::Scan {
-                current,
-                total,
-            });
-            Ok((dir.clone(), inspection))
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    for (dir, inspection) in inspections {
+    for (index, dir) in dirs.into_iter().enumerate() {
+        on_progress(ProgressEvent::Scan {
+            current: index + 1,
+            total,
+        });
+        let inspection = inspect_directory(&dir, options)?;
         if inspection
             .child_dirs
             .iter()
