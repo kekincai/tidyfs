@@ -1,3 +1,10 @@
+# 是否启用内置噪音文件名单：desktop.ini、Thumbs.db、.DS_Store
 default_ignored = true
+# 隐藏文件是否当作噪音：只含隐藏文件的文件夹也算空文件夹，删除时连同隐藏文件一起删除
+hidden_files_are_noise = true
+# 额外的噪音文件名
+ignore_names = []
+# 额外跳过、不进入的目录名（内置已跳过 .git、node_modules、AppData、$Recycle.Bin 等）
+skip_dirs = []
+# 拉平模式：keep-endpoints / one-level / collapse-chain
 flatten_mode = "keep-endpoints"
-ignore_names = ["desktop.ini", "Thumbs.db", ".DS_Store"]

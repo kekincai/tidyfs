@@ -1,288 +1,191 @@
-# tidyfs
+<div align="center">
 
-`tidyfs` 是一个用 Rust 写的小工具，用来清理空文件夹，以及拉平“只有最内层才有文件”的多层嵌套目录。
+# ◆ tidyfs
 
-这个项目现在更偏向“直接可用”：
+**清理空文件夹，拉平多层嵌套目录。多块磁盘同时扫描，一个终端界面搞定。**
 
-- 双击 `exe` 可以直接进入中文菜单
-- 先扫描，再决定是否执行
-- 扫描时显示单行动态进度
-- 默认拉平规则是“按日期目录分组，保留日期目录内第一层，去掉更深的壳目录”
+[![CI](https://github.com/kekincai/tidyfs/actions/workflows/ci.yml/badge.svg)](https://github.com/kekincai/tidyfs/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/kekincai/tidyfs?display_name=tag&sort=semver)](https://github.com/kekincai/tidyfs/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Windows-0078D6)
 
-## 现在的行为
-
-### 1. 清理空文件夹
-
-会递归扫描你选中的根目录，从深到浅判断：
-
-- 没有普通文件
-- 没有非空子目录
-- `desktop.ini`、`Thumbs.db`、`.DS_Store` 这类噪音文件默认不算有效内容
-
-如果确认执行，就会删除这些空文件夹。
-
-空文件夹扫描默认使用顺序扫描。这个操作主要受磁盘 I/O、Windows 文件索引和杀毒软件影响，多线程同时读取大量小目录反而容易更慢；顺序扫描通常更稳定。执行删除时如果某个目录因为权限、占用或系统限制删不掉，工具会记录 `[FAILED]` 并继续处理后面的目录，不会因为一个失败项中断整批任务。Windows 下遇到只读属性时，会先尝试清掉只读属性再删除。
-
-如果文件资源管理器正好停在某个已经被删除的空文件夹里，再访问它时 Windows 会提示路径不存在或位置不可用。这是正常现象，回到上层目录或按 `F5` 刷新即可。
-
-### 2. 拉平目录
-
-默认规则是：
-
-- 你选择的目录下面，每个一级子目录都会作为一个整理单元，例如日期目录 `20250203`
-- 在日期目录里面，保留第一层目录，例如 `project_alpha`
-- 第一层目录下面所有只起传递作用的壳目录都会去掉
-- 中间壳目录必须没有普通文件
-- 移动成功后，才会尝试删除已经空掉的壳目录
-
-例子：
+</div>
 
 ```text
-Downloads/
-  20250203/
-    cover.jpg
-    project_alpha/
-      archive_shell/
-        video.mp4
+  ◆ tidyfs   选择位置 › 扫描 › 确认 › 执行 › 完成                                      v0.2.0
+  ──────────────────────────────────────────────────────────────────────────────────────────
+
+   清理空文件夹   拉平目录
+
+  删除没有任何内容的文件夹。隐藏文件和 desktop.ini、Thumbs.db 这类噪音文件不算内容，会一起清理。
+
+  位置 ─────────────────────────────────────────────────────── 已选 2 · 不同磁盘并行扫描
+  › ● C:\     Windows         NTFS    ━━━━━━━━━━━━━━  215 GB 可用  476 GB
+    ○ D:\     Data            exFAT   ━━━━━━━━━━━━━━  1.1 TB 可用  4.5 TB
+    ● E:\     Elements        exFAT   ━━━━━━━━━━━━━━  949 GB 可用  4.5 TB
+    ○ D:\Photos\2025                  文件夹
+
+  ──────────────────────────────────────────────────────────────────────────────────────────
+  ↑↓ 移动   空格 勾选   a 全选   Tab 切换功能   f 选择文件夹   p 粘贴路径   Enter 开始扫描
 ```
 
-会变成：
+## 特点
+
+- **多磁盘并行**：同一块磁盘上的目录按顺序扫描（单盘多线程读小目录反而更慢），不同磁盘各开一个线程同时跑。
+- **快**：每个目录只读一次，只用目录项自带的类型信息，不对每个文件额外 `stat`；分析全在内存里完成。
+- **先看再做**：扫描结果逐项预览、可导出完整清单，确认后才执行。
+- **安全**：
+  - 不跟随符号链接和 Junction；
+  - 自动跳过 `Windows`、`Program Files`、`$Recycle.Bin`、`AppData`、`.git`、`node_modules` 等目录；
+  - 单项失败（权限、占用）只记录，不中断整批；
+  - 同名文件自动改名，不会覆盖；
+  - 拉平不允许直接作用于整块磁盘；
+  - 每次执行都写操作日志，方便核对。
+- **现代终端界面**：基于 [Ink](https://github.com/vadimdemedes/ink)（React for CLI），能适应窄窗口；也保留了完整的命令行模式，方便写脚本。
+
+## 安装
+
+### 下载发布版（推荐）
+
+到 [Releases](https://github.com/kekincai/tidyfs/releases) 下载 `tidyfs-windows-x64.zip`，解压后双击 `tidyfs.exe`。
+
+交互界面需要 [Node.js 22+](https://nodejs.org/)。不装 Node 也可以直接用[命令行模式](#命令行)。
+
+### 从源码构建
+
+```bash
+git clone https://github.com/kekincai/tidyfs.git
+cd tidyfs
+cargo build --release
+npm --prefix ui ci
+npm --prefix ui run build
+```
+
+然后双击 `target\release\tidyfs.exe`，或者运行仓库根目录的 `tidyfs.cmd`。
+
+## 使用
+
+### 交互界面
+
+1. `Tab` 选择功能：**清理空文件夹** 或 **拉平目录**；
+2. 用 `空格` 勾选一个或多个磁盘，也可以按 `f` 弹出文件夹选择框（可多选）、按 `p` 粘贴路径；
+3. `Enter` 开始扫描，每个位置一行实时进度；
+4. 在结果页用 `←→` 切换位置、`空格` 排除某个位置、`o` 导出完整清单；
+5. `Enter` 后按 `y` 确认执行。
+
+### 命令行
+
+```bash
+# 同时扫描两块磁盘上的空文件夹（只预览）
+tidyfs empty D:\ E:\
+
+# 真正删除
+tidyfs empty D:\Downloads --apply
+
+# 拉平目录
+tidyfs flatten D:\Photos --mode keep-endpoints --apply
+
+# 列出磁盘
+tidyfs drives
+```
+
+不传路径时会弹出文件夹选择框。旧的命令名 `scan-empty`、`remove-empty`、`detect-chains`、`flatten-single-chain` 仍然可用。
+
+## 规则说明
+
+### 空文件夹
+
+从深到浅判断，满足下面条件的文件夹算空：
+
+- 没有普通文件（隐藏文件和噪音文件不算）；
+- 子文件夹也全部是空文件夹；
+- 里面没有符号链接、Junction 或被跳过的系统目录。
+
+删除时会连同里面的隐藏文件、噪音文件一起删除。磁盘根目录本身永远不会被删除。
+
+### 拉平目录
+
+默认规则 `keep-endpoints`：选中目录下的每个日期目录（如 `20250203`）是一个整理单元，保留日期目录里的第一层，去掉更深的“壳目录”。
 
 ```text
-Downloads/
-  20250203/
-    cover.jpg
-    project_alpha/
-      video.mp4
+20250203/project_alpha/archive_shell/video.mp4  →  20250203/project_alpha/video.mp4
+20250101/a/b/x/y/c/photo.jpg                    →  20250101/a/photo.jpg
 ```
 
-也就是 `20250203/project_alpha/archive_shell/video.mp4` 会变成 `20250203/project_alpha/video.mp4`。
-
-普通多层目录也是同样规则：
+同一个壳目录下有多个末端文件夹时，保留末端文件夹名，避免把不同来源的文件混在一起：
 
 ```text
-Downloads/
-  20250101/
-    a/
-      b/
-        c/
-          file1.jpg
-          file2.jpg
+20250101/a/b/c/c.txt  →  20250101/a/c/c.txt
+20250101/a/b/d/d.txt  →  20250101/a/d/d.txt
 ```
 
-会变成：
+其它模式：
 
-```text
-Downloads/
-  20250101/
-    a/
-      file1.jpg
-      file2.jpg
-```
+| 模式 | 效果 |
+| --- | --- |
+| `keep-endpoints` | 保留首尾（默认） |
+| `one-level` | 只把最内层的文件提升一层 |
+| `collapse-chain` | 单链目录一路压平到链的起点 |
 
-也就是 `20250101/a/b/c/file` 会变成 `20250101/a/file`。
+中间壳目录里有普通文件、或结构更复杂时不会处理。最内层的隐藏文件会跟着一起移动，不会被删除。
 
-如果中间有很多层，也会一次去掉：
+## 配置
 
-```text
-Downloads/
-  20250101/
-    a/
-      b/
-        x/
-          y/
-            c/
-              photo.jpg
-```
-
-会变成：
-
-```text
-Downloads/
-  20250101/
-    a/
-      photo.jpg
-```
-
-也就是 `20250101/a/b/x/y/c/photo.jpg` 会变成 `20250101/a/photo.jpg`。
-
-如果同一个中间层下面有多个末端文件夹，也会一起处理：
-
-```text
-Downloads/
-  20250101/
-    a/
-      b/
-        c/
-          c.txt
-        d/
-          d.txt
-```
-
-会变成：
-
-```text
-Downloads/
-  20250101/
-    a/
-    c.txt
-    d.txt
-```
-
-如果最内层里有很多文件，也会一起处理。  
-如果目标位置有同名文件，会自动改名避免覆盖。  
-如果结构更复杂，比如最内层下面还有复杂子目录，就不会贸然处理。
-
-执行删除或拉平时，工具会在根目录下写入操作日志：
-
-```text
-.tidyfs-journals/
-  tidyfs-时间戳.log
-```
-
-日志会记录已经完成的移动、删除文件、删除目录操作。它不是自动回滚功能，但可以用来核对实际发生了什么。
-
-## 双击使用
-
-直接双击 [target\release\tidyfs.exe](C:\Users\kekin\dev\文件夹清理\target\release\tidyfs.exe) 后，会看到中文菜单：
-
-1. 扫描空文件夹，然后决定是否删除
-2. 扫描可拉平目录，然后决定是否执行
-3. 退出
-
-交互流程是：
-
-1. 选择功能
-2. 弹出文件夹选择框
-3. 扫描并显示进度
-4. 预览结果
-5. 询问是否执行
-6. 执行完成后回到主菜单
-
-不会做完一次就直接关闭窗口。
-
-## 命令行使用
-
-虽然双击已经能用，但命令行模式仍然保留。
-
-### 扫描空文件夹
-
-```powershell
-tidyfs scan-empty "D:\Downloads"
-```
-
-也可以不传目录，程序会弹出目录选择框：
-
-```powershell
-tidyfs scan-empty
-```
-
-### 预览删除空文件夹
-
-```powershell
-tidyfs remove-empty "D:\Downloads" --dry-run
-```
-
-### 真正删除空文件夹
-
-```powershell
-tidyfs remove-empty "D:\Downloads" --apply
-```
-
-### 检测可拉平目录
-
-```powershell
-tidyfs detect-chains "D:\Photos"
-```
-
-### 默认拉平规则：保留首尾
-
-```powershell
-tidyfs flatten-single-chain "D:\Photos" --dry-run --mode keep-endpoints
-```
-
-### 其他模式
-
-只提升一层：
-
-```powershell
-tidyfs flatten-single-chain "D:\Photos" --dry-run --mode one-level
-```
-
-一路压平到链起点：
-
-```powershell
-tidyfs flatten-single-chain "D:\Photos" --apply --mode collapse-chain
-```
-
-### 输出日志
-
-```powershell
-tidyfs detect-chains "D:\Archive" --log-file ".\tidyfs.log"
-```
-
-### 追加忽略文件名
-
-```powershell
-tidyfs remove-empty "D:\Archive" --dry-run --ignore-name ".nomedia" --ignore-name "ehthumbs.db"
-```
-
-## 配置文件
-
-默认会尝试读取当前工作目录下的 [tidyfs.toml](C:\Users\kekin\dev\文件夹清理\tidyfs.toml)。
-
-也可以显式指定：
-
-```powershell
-tidyfs --config ".\tidyfs.toml" flatten-single-chain "D:\Downloads" --dry-run
-```
-
-示例配置：
+程序会读取当前目录或程序所在目录下的 `tidyfs.toml`，也可以用 `--config` 指定：
 
 ```toml
-default_ignored = true
+default_ignored = true          # 内置噪音文件名单：desktop.ini、Thumbs.db、.DS_Store
+hidden_files_are_noise = true   # 只含隐藏文件的文件夹也算空文件夹
+ignore_names = [".nomedia"]     # 额外的噪音文件名
+skip_dirs = ["cache"]           # 额外跳过的目录名
 flatten_mode = "keep-endpoints"
-ignore_names = ["desktop.ini", "Thumbs.db", ".nomedia"]
 ```
 
-说明：
+命令行参数优先于配置文件。
 
-- `default_ignored = true` 会启用内置噪音文件名单
-- `flatten_mode` 可选 `keep-endpoints`、`one-level`、`collapse-chain`
-- `ignore_names` 会和命令行里的 `--ignore-name` 合并
-- 命令行参数优先级高于配置文件
+## 日志
 
-## 进度显示
+| 内容 | 位置 |
+| --- | --- |
+| 操作日志：每次执行实际移动 / 删除了什么 | `%LOCALAPPDATA%\tidyfs\journals\` |
+| 诊断日志：扫描耗时、错误等，按天滚动保留 14 天 | `%LOCALAPPDATA%\tidyfs\logs\` |
 
-为了避免“看起来像卡住”，现在会显示两类动态进度：
+诊断日志级别用环境变量 `TIDYFS_LOG` 控制，例如 `TIDYFS_LOG=debug`。命令行加 `-v` 会同时输出到终端。
 
-- 发现目录阶段
-- 分析/执行阶段
+## 架构
 
-扫描阶段只显示单行动态进度，不会持续刷很多日志。
-
-默认会使用多线程加速拉平流程：拉平扫描会并行分析目录；执行拉平时不同目标目录可以并行移动。同一个目标目录内部仍然串行处理，避免同名文件竞争导致覆盖或错名。空文件夹扫描保持顺序扫描，因为它通常是小目录 I/O 密集型任务，多线程在 Windows 上经常更慢。
-
-## 构建
-
-开发调试：
-
-```powershell
-cargo run -- scan-empty
+```text
+┌──────────────────────────┐   JSON Lines (stdin/stdout)   ┌──────────────────────────────┐
+│  ui/  Node.js · Ink      │ ────────────────────────────▶ │  tidyfs serve  (Rust 引擎)    │
+│  界面、交互、pino 日志    │ ◀──────────────────────────── │  扫描 / 执行 / 磁盘枚举       │
+└──────────────────────────┘                               └──────────────────────────────┘
 ```
 
-运行测试：
-
-```powershell
-cargo test
+```text
+src/
+├── domain/   纯业务逻辑：目录树、空目录分析、拉平规则、执行结果
+├── engine/   多磁盘调度：按磁盘分组，组内顺序、组间并行
+├── infra/    文件系统工具、磁盘枚举、配置、操作日志、诊断日志（tracing）
+└── app/      命令行、控制台输出、JSON 服务、界面启动器
+ui/src/
+├── engine/   引擎子进程客户端与协议类型
+├── screens/  选择位置 / 扫描 / 确认 / 执行 / 完成
+└── components/  设计系统：配色、框架、进度条、路径显示
 ```
 
-编译发布版：
+扫描结果保存在引擎进程里，界面只拿预览（每个位置最多 2000 条），执行时直接使用内存里的计划。
 
-```powershell
-cargo build --release
+## 开发
+
+```bash
+cargo test                 # Rust 单元测试
+cargo clippy --all-targets
+npm --prefix ui run lint   # Prettier + TypeScript 检查
+npm --prefix ui test       # 端到端界面测试（需要先 cargo build）
 ```
 
-生成的可执行文件在：
+欢迎提 Issue 和 PR，详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-`target\release\tidyfs.exe`
+## 许可证
+
+[MIT](LICENSE)

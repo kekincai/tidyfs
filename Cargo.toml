@@ -1,6 +1,12 @@
 [package]
 name = "tidyfs"
-version = "0.1.0"
+version = "0.2.0"
+description = "清理空文件夹、拉平多层嵌套目录，多磁盘并行扫描。"
+license = "MIT"
+repository = "https://github.com/kekincai/tidyfs"
+readme = "README.md"
+keywords = ["cleanup", "empty-folders", "filesystem", "cli", "windows"]
+categories = ["command-line-utilities", "filesystem"]
 edition = "2024"
 
 [dependencies]
@@ -8,11 +14,16 @@ anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 indicatif = "0.18"
 rfd = "0.15"
-rayon = "1.10"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 time = { version = "0.3", features = ["formatting", "local-offset"] }
 toml = "0.9"
-walkdir = "2.5"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "local-time"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug"] }
 
 [dev-dependencies]
 tempfile = "3.15"

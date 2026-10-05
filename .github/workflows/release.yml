@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+          npm ci --omit=dev
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = "tidyfs"
+          New-Item -ItemType Directory -Force "$out/ui" | Out-Null
+          Copy-Item target/release/tidyfs.exe, tidyfs.toml, README.md, LICENSE, CHANGELOG.md $out
+          Copy-Item ui/package.json "$out/ui"
+          Copy-Item -Recurse ui/dist, ui/node_modules "$out/ui"
+          Remove-Item -Recurse -Force "$out/ui/dist/__tests__"
+          Compress-Archive -Path $out -DestinationPath tidyfs-windows-x64.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: tidyfs-windows-x64.zip
+          generate_release_notes: true

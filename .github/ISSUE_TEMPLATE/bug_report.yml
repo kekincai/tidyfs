@@ -1,0 +1,38 @@
+name: 问题反馈
+description: 程序行为不符合预期
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 如果问题可能导致误删或误移动文件，请改用 [私下报告](https://github.com/kekincai/tidyfs/security/advisories/new)。
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 你做了哪些操作，期望什么结果，实际得到什么结果。
+    validations:
+      required: true
+  - type: textarea
+    id: tree
+    attributes:
+      label: 目录结构示例
+      description: 能复现问题的最小目录结构（可以用 `tree /f` 输出后删掉隐私信息）。
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      placeholder: tidyfs --version 的输出
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: 系统 / 终端
+      placeholder: Windows 11 24H2 / Windows Terminal
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: '%LOCALAPPDATA%\tidyfs\logs 下当天的日志片段。'
+      render: text
