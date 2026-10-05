@@ -147,8 +147,10 @@ flatten_mode = "keep-endpoints"
 
 | 内容 | 位置 |
 | --- | --- |
-| 操作日志：每次执行实际移动 / 删除了什么 | `%LOCALAPPDATA%\tidyfs\journals\` |
-| 诊断日志：扫描耗时、错误等，按天滚动保留 14 天 | `%LOCALAPPDATA%\tidyfs\logs\` |
+| 操作日志：每次执行实际移动 / 删除了什么 | `tidyfs.exe` 所在目录下的 `journals\` |
+| 诊断日志：扫描耗时、错误等，按天滚动保留 14 天 | `tidyfs.exe` 所在目录下的 `logs\`（引擎和界面日志都在这里） |
+
+日志只写在程序的部署目录里，绝不写进被扫描、被处理的文件夹。如果部署目录没有写权限（比如放在 `Program Files` 下），会改写到 `%LOCALAPPDATA%\tidyfs\`。也可以用环境变量 `TIDYFS_HOME` 指定日志根目录。
 
 诊断日志级别用环境变量 `TIDYFS_LOG` 控制，例如 `TIDYFS_LOG=debug`。命令行加 `-v` 会同时输出到终端。
 

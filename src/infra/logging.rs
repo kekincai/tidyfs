@@ -2,11 +2,9 @@
 //! - journal 记录每次实际移动/删除了什么，是给人核对用的审计记录；
 //! - 这里记录扫描耗时、错误、调度情况，用来排查问题。
 //!
-//! 日志写到 `%LOCALAPPDATA%\tidyfs\logs`，按天滚动，保留 14 天。
+//! 日志写到部署目录下的 `logs`（见 `paths`），按天滚动，保留 14 天。
 //! `serve` 模式下 stdout 是 JSON 协议通道，所以日志永远不写 stdout。
 //! 日志级别用环境变量 `TIDYFS_LOG` 控制，例如 `TIDYFS_LOG=debug`。
-
-use std::path::PathBuf;
 
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{Builder, Rotation};
@@ -14,13 +12,7 @@ use tracing_subscriber::fmt::time::LocalTime;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
 
-pub fn log_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("tidyfs")
-        .join("logs")
-}
+pub use super::paths::log_dir;
 
 /// 持有它直到程序退出，退出时会把缓冲区里的日志写完。
 pub struct LogGuard {

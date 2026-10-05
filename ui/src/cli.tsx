@@ -27,8 +27,8 @@ function findEngine(): string | null {
 	return found[0]?.candidate ?? null;
 }
 
-const log = createLogger();
 const enginePath = findEngine();
+const log = createLogger(enginePath);
 if (!enginePath) {
 	console.error('找不到 tidyfs 引擎。请先在仓库根目录执行 cargo build --release，或设置环境变量 TIDYFS_ENGINE。');
 	process.exit(1);

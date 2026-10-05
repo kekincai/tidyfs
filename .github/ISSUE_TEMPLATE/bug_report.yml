@@ -34,5 +34,5 @@ body:
     id: logs
     attributes:
       label: 日志
-      description: '%LOCALAPPDATA%\tidyfs\logs 下当天的日志片段。'
+      description: 'tidyfs.exe 所在目录下 logs 文件夹里当天的日志片段。'
       render: text

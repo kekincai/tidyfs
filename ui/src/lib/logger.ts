@@ -5,17 +5,27 @@ import pino, {type Logger} from 'pino';
 
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
 
-export function logDir(): string {
-	const base = process.env['LOCALAPPDATA'] ?? os.tmpdir();
-	return path.join(base, 'tidyfs', 'logs');
+/**
+ * 和引擎一致：优先写在部署目录（TIDYFS_HOME 或引擎 exe 所在目录）的 logs 下，
+ * 不可写时退回 %LOCALAPPDATA%\tidyfs\logs。绝不写进被处理的文件夹。
+ */
+export function logDir(enginePath: string | null): string {
+	const home = process.env['TIDYFS_HOME'] ?? (enginePath ? path.dirname(enginePath) : null);
+	if (home) {
+		const dir = path.join(home, 'logs');
+		try {
+			fs.mkdirSync(dir, {recursive: true});
+			fs.accessSync(dir, fs.constants.W_OK);
+			return dir;
+		} catch {
+			// 部署目录不可写，用下面的备用位置。
+		}
+	}
+	return path.join(process.env['LOCALAPPDATA'] ?? os.tmpdir(), 'tidyfs', 'logs');
 }
 
-/**
- * 界面日志写到 %LOCALAPPDATA%\tidyfs\logs\ui.log（和引擎日志在同一目录）。
- * 终端被 Ink 占用，所以日志绝不能写到 stdout。级别由 TIDYFS_LOG 控制。
- */
-export function createLogger(): Logger {
-	const dir = logDir();
+export function createLogger(enginePath: string | null): Logger {
+	const dir = logDir(enginePath);
 	const file = path.join(dir, 'ui.log');
 	try {
 		fs.mkdirSync(dir, {recursive: true});

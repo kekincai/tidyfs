@@ -1,5 +1,5 @@
-//! 操作日志。统一写到 `%LOCALAPPDATA%\tidyfs\journals`，而不是被处理的目录里：
-//! 磁盘根目录通常没有写权限，而且日志目录本身也不该出现在下一次扫描结果里。
+//! 操作日志。写到部署目录下的 `journals`（见 `paths`），绝不写进被处理的文件夹：
+//! 不污染用户的目录，磁盘根目录通常也没有写权限，日志也不该出现在下一次扫描结果里。
 
 use std::fmt::Write as _;
 use std::fs;
@@ -10,16 +10,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::domain::report::Report;
 
-pub fn journal_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("TIDYFS_JOURNAL_DIR") {
-        return PathBuf::from(dir);
-    }
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("tidyfs")
-        .join("journals")
-}
+pub use super::paths::journal_dir;
 
 /// 写入一次执行的日志。没有任何实际操作时不写文件。
 pub fn write(root: &Path, task: &str, report: &Report) -> Result<Option<PathBuf>> {
