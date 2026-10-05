@@ -1,6 +1,6 @@
 {
   "name": "tidyfs-ui",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "tidyfs 的终端交互界面（Ink），后端是 Rust 写的 tidyfs 引擎。",
   "private": true,
   "type": "module",

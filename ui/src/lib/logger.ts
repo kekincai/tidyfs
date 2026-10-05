@@ -42,6 +42,7 @@ export function createLogger(enginePath: string | null): Logger {
 			base: {pid: process.pid},
 			timestamp: pino.stdTimeFunctions.isoTime,
 		},
-		pino.destination({dest: file, sync: false, mkdir: true}),
+		// 同步写：界面日志量很小，同步写能保证程序随时退出都不丢日志、不报错。
+		pino.destination({dest: file, sync: true, mkdir: true}),
 	);
 }

@@ -2,6 +2,13 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.1] - 2026-10-05
+
+### 修复
+- 界面在启动阶段直接退出时（比如不在终端里运行）日志模块报错。
+- 界面遇到未捕获的异常时会记录日志并退出，而不是停在异常状态。
+- 日志改为写在程序部署目录（`logs\`、`journals\`）。
+
 ## [0.2.0] - 2026-10-05
 
 ### 新增
@@ -24,4 +31,5 @@
 
 - 第一个版本：中文菜单、空文件夹清理、目录拉平。
 
+[0.2.1]: https://github.com/kekincai/tidyfs/releases/tag/v0.2.1
 [0.2.0]: https://github.com/kekincai/tidyfs/releases/tag/v0.2.0

@@ -1,6 +1,6 @@
 [package]
 name = "tidyfs"
-version = "0.2.0"
+version = "0.2.1"
 description = "清理空文件夹、拉平多层嵌套目录，多磁盘并行扫描。"
 license = "MIT"
 repository = "https://github.com/kekincai/tidyfs"

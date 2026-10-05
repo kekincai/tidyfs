@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {render} from 'ink';
 import {App} from './app.js';
 import {EngineClient} from './engine/client.js';
-import {createLogger} from './lib/logger.js';
+import {createLogger, logDir} from './lib/logger.js';
 
 /** 引擎查找顺序：环境变量 TIDYFS_ENGINE（双击 exe 启动时由 exe 设置）→ 仓库里的 release/debug 构建 → 同目录。 */
 function findEngine(): string | null {
@@ -28,7 +28,6 @@ function findEngine(): string | null {
 }
 
 const enginePath = findEngine();
-const log = createLogger(enginePath);
 if (!enginePath) {
 	console.error('找不到 tidyfs 引擎。请先在仓库根目录执行 cargo build --release，或设置环境变量 TIDYFS_ENGINE。');
 	process.exit(1);
@@ -38,9 +37,11 @@ if (!process.stdin.isTTY) {
 	process.exit(1);
 }
 
+const log = createLogger(enginePath);
 process.on('uncaughtException', error => {
 	log.fatal({err: error}, 'uncaught exception');
-	log.flush();
+	process.stderr.write(['', `出错了：${error.message}`, `详细信息见日志 ${logDir(enginePath)}`, ''].join('\n'));
+	process.exit(1);
 });
 
 const engine = new EngineClient(enginePath, log);
