@@ -36,7 +36,7 @@ jobs:
           Copy-Item -Recurse ui/dist, ui/node_modules "$out/ui"
           Remove-Item -Recurse -Force "$out/ui/dist/__tests__"
           Compress-Archive -Path $out -DestinationPath tidyfs-windows-x64.zip
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: tidyfs-windows-x64.zip
           generate_release_notes: true
