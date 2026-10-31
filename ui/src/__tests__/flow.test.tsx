@@ -164,6 +164,35 @@ test('确认页：跳过某个文件夹，它和它的上下级都原样保留',
 	}
 });
 
+test('确认页：结果超过预览上限时，跳过一项的数量按完整结果计算', {skip}, async () => {
+	// 一个文件夹里有 2001 个空子文件夹：预览只带前 2000 项，父文件夹不在预览里。
+	const entries: Record<string, null> = {};
+	for (let i = 0; i <= 2000; i++) entries[`parent/c${String(i).padStart(4, '0')}`] = null;
+	const root = tree('big', entries);
+	const app = await launch();
+	try {
+		await app.press(paste(root));
+		await waitFor(app.frame, '已添加并勾选');
+		await app.press(KEY.enter);
+		await waitFor(app.frame, '将删除 2,002 个空文件夹');
+
+		// 跳过排在第一行的子文件夹，它的父文件夹（不在预览里）也删不掉了，所以是 2000 而不是 2001。
+		await app.press(' ');
+		show('跳过一项之后', await waitFor(app.frame, '将删除 2,000 个空文件夹'));
+
+		await app.press(KEY.enter);
+		assert.match(await waitFor(app.frame, '记进操作日志'), /跳过 2 项/);
+		await app.press('y');
+		await waitFor(app.frame, '全部完成', 30_000);
+
+		assert.ok(fs.existsSync(path.join(root, 'parent', 'c0001')));
+		assert.ok(!fs.existsSync(path.join(root, 'parent', 'c0000')));
+		assert.ok(!fs.existsSync(path.join(root, 'parent', 'c2000')));
+	} finally {
+		app.close();
+	}
+});
+
 test('确认页：跳过整个位置', {skip}, async () => {
 	const first = tree('loc-1', {x: null});
 	const second = tree('loc-2', {y: null});

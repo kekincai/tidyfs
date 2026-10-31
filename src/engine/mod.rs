@@ -71,38 +71,65 @@ impl Found {
     /// 去掉用户在预览里排除的项（按结果里的序号）。
     /// 空目录：被排除的目录原样保留，包括它里面的子目录；它的上级目录删不掉（里面还有东西），也一并去掉。
     pub fn without(&self, excluded: &[usize]) -> Found {
+        let remaining = self.remaining(excluded);
+        match self {
+            Found::Empty(dirs) => Found::Empty(select(dirs, &remaining)),
+            Found::Flatten(plans) => Found::Flatten(select(plans, &remaining)),
+        }
+    }
+
+    /// `without` 之后还剩多少项、要移动多少个文件，不复制结果。
+    /// 预览只带前几千项，被连带保留的上级目录可能不在预览里，所以要在完整结果上算。
+    pub fn tally_without(&self, excluded: &[usize]) -> (usize, usize) {
+        let remaining = self.remaining(excluded);
+        let count = remaining.iter().filter(|keep| **keep).count();
+        let files = match self {
+            Found::Empty(_) => 0,
+            Found::Flatten(plans) => plans
+                .iter()
+                .zip(&remaining)
+                .filter(|(_, keep)| **keep)
+                .map(|(plan, _)| plan.file_count as usize)
+                .sum(),
+        };
+        (count, files)
+    }
+
+    /// 每一项在去掉排除项之后是否还要处理，和结果一一对应。
+    fn remaining(&self, excluded: &[usize]) -> Vec<bool> {
         let excluded = excluded.iter().copied().collect::<HashSet<_>>();
         match self {
             Found::Empty(dirs) => {
-                let kept = excluded
+                let skipped = excluded
                     .iter()
                     .filter_map(|index| dirs.get(*index))
                     .map(|dir| dir.path.as_path())
                     .collect::<HashSet<_>>();
-                let ancestors = kept
+                let ancestors = skipped
                     .iter()
                     .flat_map(|path| path.ancestors())
                     .collect::<HashSet<_>>();
-                Found::Empty(
-                    dirs.iter()
-                        .filter(|dir| {
-                            !ancestors.contains(dir.path.as_path())
-                                && !dir.path.ancestors().any(|path| kept.contains(path))
-                        })
-                        .cloned()
-                        .collect(),
-                )
+                dirs.iter()
+                    .map(|dir| {
+                        !ancestors.contains(dir.path.as_path())
+                            && !dir.path.ancestors().any(|path| skipped.contains(path))
+                    })
+                    .collect()
             }
-            Found::Flatten(plans) => Found::Flatten(
-                plans
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, _)| !excluded.contains(index))
-                    .map(|(_, plan)| plan.clone())
-                    .collect(),
-            ),
+            Found::Flatten(plans) => (0..plans.len())
+                .map(|index| !excluded.contains(&index))
+                .collect(),
         }
     }
+}
+
+fn select<T: Clone>(items: &[T], remaining: &[bool]) -> Vec<T> {
+    items
+        .iter()
+        .zip(remaining)
+        .filter(|(_, keep)| **keep)
+        .map(|(item, _)| item.clone())
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -433,6 +460,7 @@ mod tests {
 
         let trimmed = outcome.without(&[b]);
         assert_eq!(engine_paths(&trimmed.found), vec![root.join("other")]);
+        assert_eq!(outcome.found.tally_without(&[b]), (1, 0));
 
         // SAFETY: 单个测试内设置，测试只读取这个变量。
         unsafe { std::env::set_var("TIDYFS_JOURNAL_DIR", temp.path().join("journals")) };
@@ -457,6 +485,8 @@ mod tests {
         assert_eq!(outcome.found.len(), 2);
         let trimmed = outcome.without(&[0]);
         assert_eq!(trimmed.found.len(), 1);
+        assert_eq!(outcome.found.tally_without(&[0]), (1, 1));
+        assert_eq!(outcome.found.tally_without(&[]), (2, 2));
         assert_eq!(
             engine_paths(&trimmed.found),
             vec![date.join("b").join("shell")]

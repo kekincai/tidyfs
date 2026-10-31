@@ -1,6 +1,6 @@
 import path from 'node:path';
 import {Box, Text, useInput, useWindowSize} from 'ink';
-import {useMemo, useState} from 'react';
+import {useEffect, useMemo, useState} from 'react';
 import type {EngineClient} from '../engine/client.js';
 import type {Item, RootScan} from '../engine/protocol.js';
 import {Frame, Group} from '../components/Frame.js';
@@ -85,14 +85,40 @@ export function Review({engine, settings, scanId, results, onApply, onBack, onQu
 	const [offset, setOffset] = useState(0);
 	const [confirming, setConfirming] = useState(false);
 	const [notice, setNotice] = useState<string | null>(null);
+	// 引擎按完整结果算出的数量，按“当时的排除项”记下，排除项一变旧数就不再用。
+	const [exact, setExact] = useState<Record<number, {key: string; count: number; files: number}>>({});
 
 	const flatten = settings.task === 'flatten';
 	const rowsByRoot = useMemo(
 		() => new Map(results.map(result => [result.root, buildRows(result, excluded[result.root] ?? new Set())])),
 		[results, excluded],
 	);
+	const exclusionKey = (root: number) => [...(excluded[root] ?? [])].sort((a, b) => a - b).join(',');
+
+	// 只列出了前几千项时，跳过一项可能连带保留列表之外的上级文件夹，只有引擎能算准。
+	useEffect(() => {
+		const exclude = results
+			.filter(result => result.count > result.items.length && (excluded[result.root]?.size ?? 0) > 0)
+			.map(result => ({root: result.root, items: [...excluded[result.root]!]}));
+		if (exclude.length === 0) return;
+		const keys = new Map(exclude.map(item => [item.root, exclusionKey(item.root)]));
+		engine
+			.request({cmd: 'tally', scan: scanId, exclude}, 'tally')
+			.then(({roots}) =>
+				setExact(previous => ({
+					...previous,
+					...Object.fromEntries(roots.map(item => [item.root, {key: keys.get(item.root) ?? '', count: item.count, files: item.fileCount}])),
+				})),
+			)
+			// 算不出来时退回按列表估算。
+			.catch(() => {});
+	}, [excluded]);
+
 	const tally = (result: RootScan) => {
 		if (!actionable(result) || offRoots.has(result.root)) return {count: 0, files: 0, skipped: actionable(result) ? result.count : 0};
+		const known = exact[result.root];
+		if (known && known.key === exclusionKey(result.root))
+			return {count: known.count, files: known.files, skipped: result.count - known.count};
 		const skipped = (rowsByRoot.get(result.root) ?? []).filter(row => row.state !== 'on');
 		const skippedFiles = skipped.reduce((sum, row) => sum + ('files' in row.item ? row.item.files : 0), 0);
 		return {count: result.count - skipped.length, files: result.fileCount - skippedFiles, skipped: skipped.length};

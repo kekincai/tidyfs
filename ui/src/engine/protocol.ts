@@ -55,6 +55,12 @@ export interface RootApply {
 	elapsedMs: number;
 }
 
+export interface RootTally {
+	root: number;
+	count: number;
+	fileCount: number;
+}
+
 export interface Hello {
 	version: string;
 	flattenMode: FlattenMode;
@@ -76,6 +82,7 @@ type Body =
 	| ({type: 'apply-root'} & RootApply)
 	| {type: 'apply-done'; cancelled: boolean}
 	| {type: 'exported'; path: string}
+	| {type: 'tally'; roots: RootTally[]}
 	| {type: 'ok'}
 	| {type: 'error'; message: string};
 
@@ -88,6 +95,7 @@ export type Request =
 	| {cmd: 'pick'}
 	| {cmd: 'scan'; task: TaskKind; mode?: FlattenMode; roots: string[]}
 	| {cmd: 'apply'; scan: number; roots: number[]; exclude?: {root: number; items: number[]}[]}
+	| {cmd: 'tally'; scan: number; exclude: {root: number; items: number[]}[]}
 	| {cmd: 'export'; scan: number; root: number}
 	| {cmd: 'cancel'; job: number}
 	| {cmd: 'forget'; scan: number};

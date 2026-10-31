@@ -93,7 +93,13 @@ export function baseName(target: string): string {
 /** 检查用户添加的路径：返回规范化后的绝对路径，或者不能用的原因。 */
 export function checkFolder(raw: string): {path: string} | {error: string} {
 	const resolved = /^[a-zA-Z]:$/.test(raw) ? `${raw}\\` : path.resolve(raw);
-	const stat = fs.statSync(resolved, {throwIfNoEntry: false});
+	let stat: fs.Stats | undefined;
+	try {
+		stat = fs.statSync(resolved, {throwIfNoEntry: false});
+	} catch (caught) {
+		// 没有权限、符号链接循环等：throwIfNoEntry 只管“不存在”，其它错误照样会抛出。
+		return {error: `无法读取 ${raw}：${(caught as NodeJS.ErrnoException).code ?? (caught as Error).message}`};
+	}
 	if (!stat) return {error: `找不到 ${raw}`};
 	if (!stat.isDirectory()) return {error: `${raw} 不是文件夹`};
 	return {path: resolved};

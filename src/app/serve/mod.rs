@@ -23,7 +23,9 @@ use crate::infra::config::LoadedConfig;
 use crate::infra::fsutil::normalize_roots;
 use crate::infra::{drives, journal, logging};
 
-use protocol::{Envelope, Message, Request, RootApply, RootScan, Stats, TaskKind, text};
+use protocol::{
+    Envelope, Exclusion, Message, Request, RootApply, RootScan, RootTally, Stats, TaskKind, text,
+};
 
 pub fn run(config: &LoadedConfig) -> Result<()> {
     let server = Arc::new(Server {
@@ -173,6 +175,10 @@ impl Server {
             }
             Request::Export { scan, root } => match self.export(id, scan, root) {
                 Ok(path) => self.send(id, true, Message::Exported { path: text(&path) }),
+                Err(error) => self.fail(id, format!("{error:#}")),
+            },
+            Request::Tally { scan, exclude } => match self.tally(scan, exclude) {
+                Ok(roots) => self.send(id, true, Message::Tally { roots }),
                 Err(error) => self.fail(id, format!("{error:#}")),
             },
             Request::Cancel { job } => {
@@ -336,14 +342,33 @@ impl Server {
         self.send(id, true, Message::ApplyDone { cancelled });
     }
 
-    fn export(&self, id: u64, scan: u64, root: usize) -> Result<PathBuf> {
-        let session = self
-            .sessions
+    fn session(&self, scan: u64) -> Result<Arc<Session>> {
+        self.sessions
             .lock()
             .expect("sessions lock")
             .get(&scan)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("扫描结果已失效，请重新扫描"))?;
+            .ok_or_else(|| anyhow::anyhow!("扫描结果已失效，请重新扫描"))
+    }
+
+    fn tally(&self, scan: u64, exclude: Vec<Exclusion>) -> Result<Vec<RootTally>> {
+        let session = self.session(scan)?;
+        Ok(exclude
+            .into_iter()
+            .filter_map(|exclusion| {
+                let outcome = session.outcomes.get(exclusion.root)?.as_ref()?;
+                let (count, file_count) = outcome.found.tally_without(&exclusion.items);
+                Some(RootTally {
+                    root: exclusion.root,
+                    count,
+                    file_count,
+                })
+            })
+            .collect())
+    }
+
+    fn export(&self, id: u64, scan: u64, root: usize) -> Result<PathBuf> {
+        let session = self.session(scan)?;
         let outcome = session
             .outcomes
             .get(root)
