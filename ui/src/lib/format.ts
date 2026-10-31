@@ -78,11 +78,13 @@ export function isVolumeRoot(target: string): boolean {
 	return /^[a-zA-Z]:[\\/]?$/.test(target) || target === '/';
 }
 
-/** `child` 是否在 `parent` 里面（不含 parent 本身，Windows 路径不区分大小写）。 */
+/**
+ * `child` 是否在 `parent` 里面（不含 parent 本身）。大小写按原样比较：两边都是引擎同一次扫描给出的路径，
+ * 引擎也按原样比较；开了“区分大小写”的文件夹里 `A` 和 `a` 是两个不同的文件夹。
+ */
 export function isInside(parent: string, child: string): boolean {
-	const base = parent.toLowerCase().replace(/[\\/]+$/, '');
-	const target = child.toLowerCase();
-	return target.length > base.length + 1 && target.startsWith(base) && /[\\/]/.test(target[base.length]!);
+	const base = parent.replace(/[\\/]+$/, '');
+	return child.length > base.length + 1 && child.startsWith(base) && /[\\/]/.test(child[base.length]!);
 }
 
 /** 路径最后一段，用在标签上；磁盘根目录保持 `D:\`。 */

@@ -2,12 +2,12 @@ import path from 'node:path';
 import {Box, Text, useInput, useWindowSize} from 'ink';
 import {useEffect, useMemo, useState} from 'react';
 import type {EngineClient} from '../engine/client.js';
-import type {Item, RootScan} from '../engine/protocol.js';
+import type {RootScan} from '../engine/protocol.js';
 import {Frame, Group} from '../components/Frame.js';
 import {Callout, Notice, PathText, type Hint} from '../components/primitives.js';
 import {color, glyph} from '../components/theme.js';
 import {baseName, formatCount, formatDuration, isInside, isVolumeRoot, openExternal, relativeTo, truncateMiddle} from '../lib/format.js';
-import {TASK_LABEL, type Exclusion, type Settings} from '../state.js';
+import {TASK_LABEL, buildRows, itemPath, type Exclusion, type Row, type Settings} from '../state.js';
 
 interface Props {
 	engine: EngineClient;
@@ -19,44 +19,7 @@ interface Props {
 	onQuit: () => void;
 }
 
-/** on：会处理；skipped：用户跳过（或在跳过的文件夹里面）；blocked：里面有要保留的文件夹，所以删不掉。 */
-type RowState = 'on' | 'skipped' | 'blocked';
-
-interface Row {
-	index: number;
-	item: Item;
-	state: RowState;
-}
-
 const actionable = (result: RootScan) => !result.error && result.count > 0;
-const itemPath = (item: Item) => ('path' in item ? item.path : item.from);
-const samePath = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-const collator = new Intl.Collator('zh-CN', {numeric: true, sensitivity: 'base'});
-
-/** 按路径逐段排序，子文件夹紧跟在父文件夹后面。 */
-function comparePaths(a: string, b: string): number {
-	const left = a.split(/[\\/]/);
-	const right = b.split(/[\\/]/);
-	for (let i = 0; i < Math.min(left.length, right.length); i++) {
-		const order = collator.compare(left[i]!, right[i]!);
-		if (order !== 0) return order;
-	}
-	return left.length - right.length;
-}
-
-function buildRows(result: RootScan, excluded: ReadonlySet<number>): Row[] {
-	const rows = result.items.map((item, index) => ({index, item}));
-	rows.sort((a, b) => comparePaths(itemPath(a.item), itemPath(b.item)));
-	const kept = [...excluded].map(index => result.items[index]).filter((item): item is Item => item !== undefined);
-	return rows.map(row => {
-		if (!('path' in row.item)) return {...row, state: excluded.has(row.index) ? 'skipped' : 'on'};
-		const target = row.item.path;
-		// 和引擎一致：跳过一个空文件夹 = 它连同里面的子文件夹原样保留；它的上级文件夹也就不空了。
-		if (kept.some(item => samePath(itemPath(item), target) || isInside(itemPath(item), target))) return {...row, state: 'skipped'};
-		if (kept.some(item => isInside(target, itemPath(item)))) return {...row, state: 'blocked'};
-		return {...row, state: 'on'};
-	});
-}
 
 function ItemLine({root, row, width}: {root: string; row: Row; width: number}) {
 	const muted = row.state !== 'on';
@@ -159,7 +122,7 @@ export function Review({engine, settings, scanId, results, onApply, onBack, onQu
 			const target = row.item.path;
 			for (const index of [...set]) {
 				const other = itemPath(current.items[index]!);
-				if (samePath(other, target) || isInside(other, target) || isInside(target, other)) set.delete(index);
+				if (other === target || isInside(other, target) || isInside(target, other)) set.delete(index);
 			}
 		} else {
 			set.delete(row.index);

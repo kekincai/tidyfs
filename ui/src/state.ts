@@ -1,4 +1,5 @@
-import type {Drive, FlattenMode, TaskKind} from './engine/protocol.js';
+import type {Drive, FlattenMode, Item, RootScan, TaskKind} from './engine/protocol.js';
+import {isInside} from './lib/format.js';
 
 export interface Target {
 	path: string;
@@ -78,12 +79,54 @@ export function addFolders(previous: Target[], paths: string[]): Target[] {
 
 /**
  * 把粘贴或拖进窗口的文字拆成路径。每行一个；拖入多个文件夹时终端会写成
- * `"C:\有 空格" D:\无空格` 这样一行，有引号时按引号和空格拆开。
+ * `"C:\有 空格" D:\无空格` 或 `D:\one D:\two` 这样一行：有引号时按引号和空格拆开，
+ * 没有引号时只在“空格后面紧跟一个新的绝对路径”处拆开，单个带空格的路径保持完整。
  */
 export function parsePaths(text: string): string[] {
 	return text
 		.split(/[\r\n]+/)
-		.flatMap(line => (line.includes('"') ? [...line.matchAll(/"([^"]+)"|(\S+)/g)].map(match => match[1] ?? match[2] ?? '') : [line]))
+		.flatMap(line =>
+			line.includes('"')
+				? [...line.matchAll(/"([^"]+)"|(\S+)/g)].map(match => match[1] ?? match[2] ?? '')
+				: line.split(/\s+(?=[a-zA-Z]:[\\/]|\\\\|\/)/),
+		)
 		.map(path => path.trim())
 		.filter(path => path !== '');
+}
+
+/** on：会处理；skipped：用户跳过（或在跳过的文件夹里面）；blocked：里面有要保留的文件夹，所以删不掉。 */
+export type RowState = 'on' | 'skipped' | 'blocked';
+
+export interface Row {
+	index: number;
+	item: Item;
+	state: RowState;
+}
+
+export const itemPath = (item: Item) => ('path' in item ? item.path : item.from);
+const collator = new Intl.Collator('zh-CN', {numeric: true, sensitivity: 'base'});
+
+/** 按路径逐段排序，子文件夹紧跟在父文件夹后面。 */
+function comparePaths(a: string, b: string): number {
+	const left = a.split(/[\\/]/);
+	const right = b.split(/[\\/]/);
+	for (let i = 0; i < Math.min(left.length, right.length); i++) {
+		const order = collator.compare(left[i]!, right[i]!);
+		if (order !== 0) return order;
+	}
+	return left.length - right.length;
+}
+
+export function buildRows(result: RootScan, excluded: ReadonlySet<number>): Row[] {
+	const rows = result.items.map((item, index) => ({index, item}));
+	rows.sort((a, b) => comparePaths(itemPath(a.item), itemPath(b.item)));
+	const kept = [...excluded].map(index => result.items[index]).filter((item): item is Item => item !== undefined);
+	return rows.map(row => {
+		if (!('path' in row.item)) return {...row, state: excluded.has(row.index) ? 'skipped' : 'on'};
+		const target = row.item.path;
+		// 和引擎一致：跳过一个空文件夹 = 它连同里面的子文件夹原样保留；它的上级文件夹也就不空了。
+		if (kept.some(item => itemPath(item) === target || isInside(itemPath(item), target))) return {...row, state: 'skipped'};
+		if (kept.some(item => isInside(target, itemPath(item)))) return {...row, state: 'blocked'};
+		return {...row, state: 'on'};
+	});
 }
