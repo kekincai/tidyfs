@@ -6,7 +6,7 @@ import {Frame, Group} from '../components/Frame.js';
 import {Callout, Meter, Notice, PathText, Spinner} from '../components/primitives.js';
 import {color, glyph} from '../components/theme.js';
 import {formatCount} from '../lib/format.js';
-import {TASK_LABEL, type Settings} from '../state.js';
+import {TASK_LABEL, type Exclusion, type Settings} from '../state.js';
 
 interface Progress {
 	current: number;
@@ -20,11 +20,12 @@ interface Props {
 	scanId: number;
 	results: RootScan[];
 	roots: number[];
+	exclude: Exclusion[];
 	onDone: (applied: RootApply[], cancelled: boolean) => void;
 	onBack: () => void;
 }
 
-export function Applying({engine, settings, scanId, results, roots, onDone, onBack}: Props) {
+export function Applying({engine, settings, scanId, results, roots, exclude, onDone, onBack}: Props) {
 	const {columns} = useWindowSize();
 	const [progress, setProgress] = useState<Record<number, Progress>>({});
 	const [error, setError] = useState<string | null>(null);
@@ -33,7 +34,7 @@ export function Applying({engine, settings, scanId, results, roots, onDone, onBa
 
 	useEffect(() => {
 		const applied: RootApply[] = [];
-		job.current = engine.stream({cmd: 'apply', scan: scanId, roots}, message => {
+		job.current = engine.stream({cmd: 'apply', scan: scanId, roots, exclude}, message => {
 			switch (message.type) {
 				case 'apply-progress':
 					setProgress(previous => ({
@@ -85,6 +86,16 @@ export function Applying({engine, settings, scanId, results, roots, onDone, onBa
 	return (
 		<Frame
 			step="执行"
+			footer={
+				<>
+					{cancelling ? <Notice tone="warn">当前这一步完成后停止…</Notice> : null}
+					{error ? (
+						<Callout tone="danger" title="执行出错了">
+							{<Text>{error}</Text>}
+						</Callout>
+					) : null}
+				</>
+			}
 			status={`${TASK_LABEL[settings.task]} ${glyph.dot} ${percent}%`}
 			hints={error ? [['Enter', '返回']] : [['Esc', cancelling ? '正在停止…' : '停止（已完成的操作不会撤销）']]}
 		>
@@ -110,12 +121,6 @@ export function Applying({engine, settings, scanId, results, roots, onDone, onBa
 					);
 				})}
 			</Group>
-			{cancelling ? <Notice tone="warn">当前这一步完成后停止…</Notice> : null}
-			{error ? (
-				<Callout tone="danger" title="执行没有开始">
-					{<Text>{error}</Text>}
-				</Callout>
-			) : null}
 		</Frame>
 	);
 }

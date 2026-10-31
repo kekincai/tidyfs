@@ -76,13 +76,23 @@ export function Scanning({engine, settings, roots, onDone, onBack}: Props) {
 	const totalDirs = rows.reduce((sum, row) => sum + (row.result?.stats?.dirs ?? row.stats?.dirs ?? 0), 0);
 	const wide = columns >= 100;
 	const pathWidth = wide ? Math.max(12, Math.min(40, columns - 70)) : Math.max(8, Math.min(24, columns - 34));
-	const unit = settings.task === 'empty' ? '个空文件夹' : '组可拉平';
+	const unit = settings.task === 'empty' ? '个空文件夹' : '处可拉平';
 
 	return (
 		<Frame
 			step="扫描"
+			footer={
+				<>
+					{cancelling ? <Notice tone="warn">正在停止，已经扫描完的位置会保留结果</Notice> : null}
+					{error ? (
+						<Callout tone="danger" title="扫描没有完成">
+							{<Text>{error}</Text>}
+						</Callout>
+					) : null}
+				</>
+			}
 			status={`${TASK_LABEL[settings.task]} ${glyph.dot} ${formatDuration(Math.round(time))}`}
-			hints={error ? [['Enter', '返回']] : [['Esc', cancelling ? '正在取消…' : '取消']]}
+			hints={error ? [['Enter', '返回']] : [['Esc', cancelling ? '正在取消…' : '取消扫描']]}
 		>
 			<Group label="进度" right={`${finished}/${rows.length} 完成 · 共 ${formatCount(totalDirs)} 个目录`}>
 				{rows.map(row => {
@@ -124,12 +134,6 @@ export function Scanning({engine, settings, roots, onDone, onBack}: Props) {
 					);
 				})}
 			</Group>
-			{cancelling ? <Notice tone="warn">正在停止，已经扫描完的位置会保留结果</Notice> : null}
-			{error ? (
-				<Callout tone="danger" title="扫描没有完成">
-					{<Text>{error}</Text>}
-				</Callout>
-			) : null}
 		</Frame>
 	);
 }

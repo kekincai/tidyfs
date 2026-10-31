@@ -3,7 +3,7 @@ import type {Hello, RootApply} from '../engine/protocol.js';
 import {Frame, Group} from '../components/Frame.js';
 import {Notice, PathText, Stat} from '../components/primitives.js';
 import {color, glyph} from '../components/theme.js';
-import {formatCount, formatDuration, openExternal, truncateMiddle} from '../lib/format.js';
+import {formatCount, formatDuration, openExternal, revealFile, truncateMiddle} from '../lib/format.js';
 import {TASK_LABEL, type Settings} from '../state.js';
 
 interface Props {
@@ -23,11 +23,15 @@ export function Summary({settings, hello, applied, cancelled, onBack, onQuit}: P
 	const failures = applied.flatMap(result => result.failures);
 	const failureCount = sum(result => result.failureCount);
 	const elapsed = Math.max(0, ...applied.map(result => result.elapsedMs));
+	const journals = applied.flatMap(result => (result.journal ? [result.journal] : []));
 
 	useInput((char, key) => {
 		if (key.return || key.escape) return onBack();
 		if (char === 'q') return onQuit();
-		if (char === 'j' && hello) return openExternal(hello.journalDir);
+		if (char === 'j') {
+			if (journals[0]) return revealFile(journals[0]);
+			if (hello) return openExternal(hello.journalDir);
+		}
 		if (char === 'l' && hello) return openExternal(hello.logDir);
 	});
 
@@ -40,7 +44,7 @@ export function Summary({settings, hello, applied, cancelled, onBack, onQuit}: P
 			status={TASK_LABEL[settings.task]}
 			hints={[
 				['Enter', '回到开始'],
-				['j', '打开操作日志'],
+				['j', journals.length > 0 ? '查看这次的操作日志' : '打开操作日志文件夹'],
 				['l', '打开诊断日志'],
 				['q', '退出'],
 			]}
@@ -49,10 +53,10 @@ export function Summary({settings, hello, applied, cancelled, onBack, onQuit}: P
 				{cancelled || failureCount > 0 ? glyph.warn : glyph.ok} {headline}
 			</Text>
 
-			<Box columnGap={4} marginY={1} paddingLeft={2}>
-				<Stat value={formatCount(sum(result => result.removedDirs))} label="删除的文件夹" />
-				{settings.task === 'flatten' ? <Stat value={formatCount(sum(result => result.moved))} label="移动的文件" /> : null}
-				<Stat value={formatCount(sum(result => result.removedFiles))} label="清理的隐藏 / 噪音文件" tint={color.violet} />
+			<Box columnGap={3} marginY={1} paddingLeft={2} flexWrap="wrap">
+				<Stat value={formatCount(sum(result => result.removedDirs))} label="删除文件夹" />
+				{settings.task === 'flatten' ? <Stat value={formatCount(sum(result => result.moved))} label="移动文件" /> : null}
+				<Stat value={formatCount(sum(result => result.removedFiles))} label="清理噪音文件" tint={color.violet} />
 				<Stat value={formatCount(failureCount)} label="失败" tint={failureCount ? color.danger : color.subtle} />
 				<Stat value={formatDuration(elapsed)} label="用时" tint={color.subtle} />
 			</Box>
@@ -93,6 +97,18 @@ export function Summary({settings, hello, applied, cancelled, onBack, onQuit}: P
 					))}
 				</Group>
 			) : null}
+
+			{journals.length > 0 ? (
+				<Group label="操作日志" right="每一项移动、删除都记在这里，按 j 打开">
+					{journals.map(journal => (
+						<Text key={journal} color={color.subtle} wrap="truncate">
+							{truncateMiddle(journal, Math.max(20, columns - 6))}
+						</Text>
+					))}
+				</Group>
+			) : (
+				<Notice tone="info">这次没有改动任何文件，所以没有写操作日志。</Notice>
+			)}
 
 			{settings.task === 'empty' ? <Notice tone="info">如果资源管理器正停在已删除的文件夹里，回到上层目录或按 F5 刷新即可。</Notice> : null}
 		</Frame>

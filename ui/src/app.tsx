@@ -8,13 +8,13 @@ import {Review} from './screens/Review.js';
 import {Scanning} from './screens/Scanning.js';
 import {Setup} from './screens/Setup.js';
 import {Summary} from './screens/Summary.js';
-import {mergeDrives, type Settings, type Target} from './state.js';
+import {mergeDrives, type Exclusion, type Settings, type Target} from './state.js';
 
 type View =
 	| {kind: 'setup'}
 	| {kind: 'scanning'; roots: string[]}
 	| {kind: 'review'; scanId: number; results: RootScan[]}
-	| {kind: 'applying'; scanId: number; results: RootScan[]; roots: number[]}
+	| {kind: 'applying'; scanId: number; results: RootScan[]; roots: number[]; exclude: Exclusion[]}
 	| {kind: 'summary'; applied: RootApply[]; cancelled: boolean};
 
 export function App({engine, log}: {engine: EngineClient; log: Logger}) {
@@ -93,9 +93,9 @@ export function App({engine, log}: {engine: EngineClient; log: Logger}) {
 					results={view.results}
 					onBack={backToSetup}
 					onQuit={quit}
-					onApply={roots => {
-						log.info({scan: view.scanId, roots}, 'apply');
-						setView({kind: 'applying', scanId: view.scanId, results: view.results, roots});
+					onApply={(roots, exclude) => {
+						log.info({scan: view.scanId, roots, exclude}, 'apply');
+						setView({kind: 'applying', scanId: view.scanId, results: view.results, roots, exclude});
 					}}
 				/>
 			);
@@ -107,6 +107,7 @@ export function App({engine, log}: {engine: EngineClient; log: Logger}) {
 					scanId={view.scanId}
 					results={view.results}
 					roots={view.roots}
+					exclude={view.exclude}
 					onBack={backToSetup}
 					onDone={(applied, cancelled) => setView({kind: 'summary', applied, cancelled})}
 				/>

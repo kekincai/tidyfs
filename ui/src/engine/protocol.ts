@@ -87,7 +87,7 @@ export type Request =
 	| {cmd: 'drives'}
 	| {cmd: 'pick'}
 	| {cmd: 'scan'; task: TaskKind; mode?: FlattenMode; roots: string[]}
-	| {cmd: 'apply'; scan: number; roots: number[]}
+	| {cmd: 'apply'; scan: number; roots: number[]; exclude?: {root: number; items: number[]}[]}
 	| {cmd: 'export'; scan: number; root: number}
 	| {cmd: 'cancel'; job: number}
 	| {cmd: 'forget'; scan: number};

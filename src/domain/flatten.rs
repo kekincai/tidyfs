@@ -57,12 +57,29 @@ pub fn plan(tree: &Tree, mode: FlattenMode) -> Vec<FlattenPlan> {
     }
 }
 
-/// 估算执行步骤数，用于进度条。
+/// 执行步骤数，用于进度条：每个文件、每个噪音文件、每个（去重后的）壳目录各算一步。
 pub fn step_count(plans: &[FlattenPlan]) -> usize {
-    plans
+    let files: usize = plans
         .iter()
-        .map(|plan| plan.file_count as usize + plan.ignored_files.len() + plan.removed_dirs.len())
-        .sum()
+        .map(|plan| plan.file_count as usize + plan.ignored_files.len())
+        .sum();
+    files + shell_dirs(plans).len()
+}
+
+/// 所有计划要删除的壳目录，去重后按从深到浅排列。
+fn shell_dirs(plans: &[FlattenPlan]) -> Vec<PathBuf> {
+    let mut dirs = plans
+        .iter()
+        .flat_map(|plan| plan.removed_dirs.iter().cloned())
+        .collect::<Vec<_>>();
+    dirs.sort_by(|a, b| {
+        b.components()
+            .count()
+            .cmp(&a.components().count())
+            .then_with(|| a.cmp(b))
+    });
+    dirs.dedup();
+    dirs
 }
 
 fn plan_keep_endpoints(tree: &Tree) -> Vec<FlattenPlan> {
@@ -266,19 +283,7 @@ pub fn apply(
         }
     }
 
-    let mut dirs = plans
-        .iter()
-        .flat_map(|plan| plan.removed_dirs.iter().cloned())
-        .collect::<Vec<_>>();
-    dirs.sort_by(|a, b| {
-        b.components()
-            .count()
-            .cmp(&a.components().count())
-            .then_with(|| a.cmp(b))
-    });
-    dirs.dedup();
-
-    for dir in dirs {
+    for dir in shell_dirs(plans) {
         if is_dir_empty(&dir).unwrap_or(false) {
             match remove_dir_allow_readonly(&dir) {
                 Ok(()) => report.removed_dirs.push(dir),
@@ -470,6 +475,32 @@ mod tests {
         assert!(anchor.join("c").join("c.txt").exists());
         assert!(anchor.join("d").join("d.txt").exists());
         assert!(!anchor.join("keep").exists());
+    }
+
+    #[test]
+    fn progress_reaches_total_when_plans_share_shell_dirs() {
+        let temp = tempdir().unwrap();
+        let shell = temp
+            .path()
+            .join("20250203")
+            .join("a")
+            .join("keep")
+            .join("b");
+        fs::create_dir_all(shell.join("c")).unwrap();
+        fs::create_dir_all(shell.join("d")).unwrap();
+        fs::write(shell.join("c").join("c.txt"), "c").unwrap();
+        fs::write(shell.join("d").join("d.txt"), "d").unwrap();
+
+        let plans = plans_for(temp.path(), FlattenMode::KeepEndpoints);
+        let mut last = (0, 0);
+        apply(
+            &plans,
+            &ScanOptions::default(),
+            &AtomicBool::new(false),
+            &mut |current, total| last = (current, total),
+        );
+        assert_eq!(last.0, last.1);
+        assert_eq!(last.1, step_count(&plans));
     }
 
     #[test]

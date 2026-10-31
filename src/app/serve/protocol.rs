@@ -50,6 +50,9 @@ pub enum Request {
     Apply {
         scan: u64,
         roots: Vec<usize>,
+        /// 用户在预览里排除的项，序号对应扫描结果里的 `items`。
+        #[serde(default)]
+        exclude: Vec<Exclusion>,
     },
     Export {
         scan: u64,
@@ -61,6 +64,12 @@ pub enum Request {
     Forget {
         scan: u64,
     },
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Exclusion {
+    pub root: usize,
+    pub items: Vec<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -294,6 +303,16 @@ mod tests {
         let envelope: Envelope =
             serde_json::from_str(r#"{"id":4,"cmd":"apply","scan":3,"roots":[0,1]}"#).unwrap();
         assert!(matches!(envelope.request, Request::Apply { scan: 3, .. }));
+
+        let envelope: Envelope = serde_json::from_str(
+            r#"{"id":5,"cmd":"apply","scan":3,"roots":[0],"exclude":[{"root":0,"items":[2,5]}]}"#,
+        )
+        .unwrap();
+        let Request::Apply { exclude, .. } = envelope.request else {
+            panic!("expected apply");
+        };
+        assert_eq!(exclude[0].root, 0);
+        assert_eq!(exclude[0].items, vec![2, 5]);
     }
 
     #[test]

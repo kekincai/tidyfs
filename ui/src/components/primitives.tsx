@@ -42,22 +42,23 @@ export function Shimmer({width}: {width: number}) {
 	);
 }
 
-/** 分隔线：`标题 ───────── 右侧说明`，铺满给定宽度。 */
+/** 分隔线：`标题 ───────── 右侧说明`，铺满给定宽度；放不下时右侧说明从中间截断。 */
 export function Rule({width, label, right}: {width: number; label?: string; right?: string}) {
 	const left = label ? `${label} ` : '';
-	const tail = right ? ` ${right}` : '';
+	const room = width - stringWidth(left) - 3;
+	const tail = right && room > 4 ? ` ${truncateMiddle(right, room)}` : '';
 	const fill = Math.max(2, width - stringWidth(left) - stringWidth(tail));
 	return (
 		<Text>
 			{label ? <Text bold>{left}</Text> : null}
 			<Text color={color.faint}>{glyph.rule.repeat(fill)}</Text>
-			{right ? <Text color={color.subtle}>{tail}</Text> : null}
+			{tail ? <Text color={color.subtle}>{tail}</Text> : null}
 		</Text>
 	);
 }
 
-/** 路径：父目录淡色，最后一段正常色，读起来一眼能看到“是哪个文件夹”。 */
-export function PathText({path, width, strong = false}: {path: string; width: number; strong?: boolean}) {
+/** 路径：父目录淡色，最后一段正常色，读起来一眼能看到“是哪个文件夹”。`muted` 整体变淡（被跳过的项）。 */
+export function PathText({path, width, strong = false, muted = false}: {path: string; width: number; strong?: boolean; muted?: boolean}) {
 	const text = truncateMiddle(path, width);
 	const cut = Math.max(text.lastIndexOf('\\'), text.lastIndexOf('/'));
 	const isRootLike = cut === text.length - 1;
@@ -66,8 +67,10 @@ export function PathText({path, width, strong = false}: {path: string; width: nu
 	const pad = Math.max(0, width - stringWidth(text));
 	return (
 		<Text>
-			<Text color={color.subtle}>{parent}</Text>
-			<Text bold={strong}>{leaf}</Text>
+			<Text color={muted ? color.faint : color.subtle}>{parent}</Text>
+			<Text bold={strong} color={muted ? color.subtle : undefined}>
+				{leaf}
+			</Text>
 			{' '.repeat(pad)}
 		</Text>
 	);
@@ -121,7 +124,7 @@ export function Notice({tone, children}: {tone: 'ok' | 'warn' | 'danger' | 'info
 /** 大数字 + 小标签的统计块。 */
 export function Stat({value, label, tint = color.accent}: {value: string; label: string; tint?: string}) {
 	return (
-		<Box flexDirection="column" minWidth={14}>
+		<Box flexDirection="column" minWidth={12}>
 			<Text color={tint} bold>
 				{value}
 			</Text>
