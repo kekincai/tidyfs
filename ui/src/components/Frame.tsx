@@ -5,28 +5,48 @@ import {STEPS, color, glyph, type Step} from './theme.js';
 
 /**
  * 全屏框架：
- *   ◆ tidyfs   选择位置 › 扫描 › 确认 › 执行 › 完成          右侧状态
+ *   ◆ tidyfs   选择位置 › 扫描 › 确认 › 执行 › 完成          右侧状态（窄窗口只显示当前步骤）
  *   ───────────────────────────────────────────────────────────
- *   内容
+ *   内容（比窗口高时裁掉底部）
+ *   固定区：输入框 / 确认框 / 提示
  *   ───────────────────────────────────────────────────────────
  *   按键提示
  */
-export function Frame({step, status, hints, children}: {step: Step; status?: ReactNode; hints: Hint[]; children: ReactNode}) {
+export function Frame({
+	step,
+	status,
+	hints,
+	footer,
+	children,
+}: {
+	step: Step;
+	status?: ReactNode;
+	hints: Hint[];
+	/** 固定在按键提示上方、永远不会被裁掉的区域：输入框、确认框、提示信息。 */
+	footer?: ReactNode;
+	children: ReactNode;
+}) {
 	const {columns, rows} = useWindowSize();
 	const inner = Math.max(20, columns - 4);
 	const current = STEPS.indexOf(step);
 
 	return (
 		<Box flexDirection="column" width={columns} height={rows} paddingX={2} paddingTop={1}>
-			<Box justifyContent="space-between">
-				<Box columnGap={3}>
+			<Box justifyContent="space-between" flexShrink={0}>
+				<Box columnGap={3} flexShrink={0}>
 					<Text>
 						<Text color={color.accent}>{glyph.brand}</Text>
 						<Text bold> tidyfs</Text>
 					</Text>
-					{columns < 72 ? (
-						<Text color={color.accent} bold>
-							{step}
+					{columns < 100 ? (
+						<Text>
+							<Text color={color.accent} bold>
+								{step}
+							</Text>
+							<Text color={color.faint}>
+								{' '}
+								{current + 1}/{STEPS.length}
+							</Text>
 						</Text>
 					) : (
 						<Text>
@@ -42,17 +62,31 @@ export function Frame({step, status, hints, children}: {step: Step; status?: Rea
 					)}
 				</Box>
 				{status && columns >= 60 ? (
-					<Text color={color.subtle} wrap="truncate">
-						{status}
-					</Text>
+					<Box flexShrink={1} marginLeft={2} overflow="hidden">
+						<Text color={color.subtle} wrap="truncate-end">
+							{status}
+						</Text>
+					</Box>
 				) : null}
 			</Box>
-			<Rule width={inner} />
-			<Box flexDirection="column" flexGrow={1} overflow="hidden" paddingTop={1}>
-				{children}
+			<Box flexShrink={0}>
+				<Rule width={inner} />
 			</Box>
-			<Rule width={inner} />
-			<KeyHints hints={hints} />
+			{/* 内容比窗口高时只裁掉内容区，标题和按键提示始终可见。 */}
+			<Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden" paddingTop={1}>
+				<Box flexDirection="column" flexShrink={0}>
+					{children}
+				</Box>
+			</Box>
+			{footer ? (
+				<Box flexDirection="column" flexShrink={0}>
+					{footer}
+				</Box>
+			) : null}
+			<Box flexDirection="column" flexShrink={0}>
+				<Rule width={inner} />
+				<KeyHints hints={hints} />
+			</Box>
 		</Box>
 	);
 }

@@ -1,4 +1,6 @@
 import {spawn} from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import stringWidth from 'string-width';
 
 const numberFormat = new Intl.NumberFormat('zh-CN');
@@ -66,6 +68,41 @@ export function openExternal(target: string): void {
 	spawn(command, [target], {detached: true, stdio: 'ignore'}).unref();
 }
 
+/** 在资源管理器里打开文件所在的文件夹，并选中这个文件。 */
+export function revealFile(target: string): void {
+	if (process.platform !== 'win32') return openExternal(path.dirname(target));
+	spawn('explorer.exe', [`/select,"${target}"`], {detached: true, stdio: 'ignore', windowsVerbatimArguments: true}).unref();
+}
+
 export function isVolumeRoot(target: string): boolean {
 	return /^[a-zA-Z]:[\\/]?$/.test(target) || target === '/';
+}
+
+/**
+ * `child` 是否在 `parent` 里面（不含 parent 本身）。大小写按原样比较：两边都是引擎同一次扫描给出的路径，
+ * 引擎也按原样比较；开了“区分大小写”的文件夹里 `A` 和 `a` 是两个不同的文件夹。
+ */
+export function isInside(parent: string, child: string): boolean {
+	const base = parent.replace(/[\\/]+$/, '');
+	return child.length > base.length + 1 && child.startsWith(base) && /[\\/]/.test(child[base.length]!);
+}
+
+/** 路径最后一段，用在标签上；磁盘根目录保持 `D:\`。 */
+export function baseName(target: string): string {
+	return isVolumeRoot(target) ? target : path.basename(target.replace(/[\\/]+$/, '')) || target;
+}
+
+/** 检查用户添加的路径：返回规范化后的绝对路径，或者不能用的原因。 */
+export function checkFolder(raw: string): {path: string} | {error: string} {
+	const resolved = /^[a-zA-Z]:$/.test(raw) ? `${raw}\\` : path.resolve(raw);
+	let stat: fs.Stats | undefined;
+	try {
+		stat = fs.statSync(resolved, {throwIfNoEntry: false});
+	} catch (caught) {
+		// 没有权限、符号链接循环等：throwIfNoEntry 只管“不存在”，其它错误照样会抛出。
+		return {error: `无法读取 ${raw}：${(caught as NodeJS.ErrnoException).code ?? (caught as Error).message}`};
+	}
+	if (!stat) return {error: `找不到 ${raw}`};
+	if (!stat.isDirectory()) return {error: `${raw} 不是文件夹`};
+	return {path: resolved};
 }

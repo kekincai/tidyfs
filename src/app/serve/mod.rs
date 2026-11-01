@@ -23,7 +23,9 @@ use crate::infra::config::LoadedConfig;
 use crate::infra::fsutil::normalize_roots;
 use crate::infra::{drives, journal, logging};
 
-use protocol::{Envelope, Message, Request, RootApply, RootScan, Stats, TaskKind, text};
+use protocol::{
+    Envelope, Exclusion, Message, Request, RootApply, RootScan, RootTally, Stats, TaskKind, text,
+};
 
 pub fn run(config: &LoadedConfig) -> Result<()> {
     let server = Arc::new(Server {
@@ -160,11 +162,23 @@ impl Server {
                 };
                 self.spawn(move |server| server.scan(id, task, roots));
             }
-            Request::Apply { scan, roots } => {
-                self.spawn(move |server| server.apply(id, scan, roots));
+            Request::Apply {
+                scan,
+                roots,
+                exclude,
+            } => {
+                let exclude = exclude
+                    .into_iter()
+                    .map(|exclusion| (exclusion.root, exclusion.items))
+                    .collect();
+                self.spawn(move |server| server.apply(id, scan, roots, exclude));
             }
             Request::Export { scan, root } => match self.export(id, scan, root) {
                 Ok(path) => self.send(id, true, Message::Exported { path: text(&path) }),
+                Err(error) => self.fail(id, format!("{error:#}")),
+            },
+            Request::Tally { scan, exclude } => match self.tally(scan, exclude) {
+                Ok(roots) => self.send(id, true, Message::Tally { roots }),
                 Err(error) => self.fail(id, format!("{error:#}")),
             },
             Request::Cancel { job } => {
@@ -252,7 +266,7 @@ impl Server {
         self.send(id, true, Message::ScanDone { cancelled });
     }
 
-    fn apply(&self, id: u64, scan: u64, roots: Vec<usize>) {
+    fn apply(&self, id: u64, scan: u64, roots: Vec<usize>, exclude: HashMap<usize, Vec<usize>>) {
         // 扫描结果只能执行一次：执行后磁盘状态已经变了。
         let Some(session) = self.sessions.lock().expect("sessions lock").remove(&scan) else {
             return self.fail(id, "扫描结果已失效，请重新扫描");
@@ -264,7 +278,7 @@ impl Server {
         if selected.is_empty() {
             return self.fail(id, "没有可执行的目录");
         }
-        info!(scan, task = session.task.name(), roots = ?selected, "apply requested");
+        info!(scan, task = session.task.name(), roots = ?selected, exclude = ?exclude, "apply requested");
 
         let cancel = self.register_job(id);
         self.send(
@@ -301,6 +315,14 @@ impl Server {
         engine::per_volume(&paths, |local| {
             let index = selected[local];
             let outcome = session.outcomes[index].as_ref().expect("filtered above");
+            let trimmed;
+            let outcome = match exclude.get(&index) {
+                Some(items) if !items.is_empty() => {
+                    trimmed = outcome.without(items);
+                    &trimmed
+                }
+                _ => outcome,
+            };
             let applied = engine::apply_root(index, outcome, &self.options, &cancel, &on_event);
             self.send(
                 id,
@@ -320,14 +342,33 @@ impl Server {
         self.send(id, true, Message::ApplyDone { cancelled });
     }
 
-    fn export(&self, id: u64, scan: u64, root: usize) -> Result<PathBuf> {
-        let session = self
-            .sessions
+    fn session(&self, scan: u64) -> Result<Arc<Session>> {
+        self.sessions
             .lock()
             .expect("sessions lock")
             .get(&scan)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("扫描结果已失效，请重新扫描"))?;
+            .ok_or_else(|| anyhow::anyhow!("扫描结果已失效，请重新扫描"))
+    }
+
+    fn tally(&self, scan: u64, exclude: Vec<Exclusion>) -> Result<Vec<RootTally>> {
+        let session = self.session(scan)?;
+        Ok(exclude
+            .into_iter()
+            .filter_map(|exclusion| {
+                let outcome = session.outcomes.get(exclusion.root)?.as_ref()?;
+                let (count, file_count) = outcome.found.tally_without(&exclusion.items);
+                Some(RootTally {
+                    root: exclusion.root,
+                    count,
+                    file_count,
+                })
+            })
+            .collect())
+    }
+
+    fn export(&self, id: u64, scan: u64, root: usize) -> Result<PathBuf> {
+        let session = self.session(scan)?;
         let outcome = session
             .outcomes
             .get(root)

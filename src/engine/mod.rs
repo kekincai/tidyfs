@@ -3,7 +3,7 @@
 //! 同一块磁盘上的根目录放在同一个线程里顺序处理：单块磁盘上多线程读大量小目录反而更慢；
 //! 不同磁盘各开一个线程并行，互不影响。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
@@ -67,6 +67,69 @@ impl Found {
             Found::Flatten(plans) => plans.iter().map(|plan| plan.file_count as usize).sum(),
         }
     }
+
+    /// 去掉用户在预览里排除的项（按结果里的序号）。
+    /// 空目录：被排除的目录原样保留，包括它里面的子目录；它的上级目录删不掉（里面还有东西），也一并去掉。
+    pub fn without(&self, excluded: &[usize]) -> Found {
+        let remaining = self.remaining(excluded);
+        match self {
+            Found::Empty(dirs) => Found::Empty(select(dirs, &remaining)),
+            Found::Flatten(plans) => Found::Flatten(select(plans, &remaining)),
+        }
+    }
+
+    /// `without` 之后还剩多少项、要移动多少个文件，不复制结果。
+    /// 预览只带前几千项，被连带保留的上级目录可能不在预览里，所以要在完整结果上算。
+    pub fn tally_without(&self, excluded: &[usize]) -> (usize, usize) {
+        let remaining = self.remaining(excluded);
+        let count = remaining.iter().filter(|keep| **keep).count();
+        let files = match self {
+            Found::Empty(_) => 0,
+            Found::Flatten(plans) => plans
+                .iter()
+                .zip(&remaining)
+                .filter(|(_, keep)| **keep)
+                .map(|(plan, _)| plan.file_count as usize)
+                .sum(),
+        };
+        (count, files)
+    }
+
+    /// 每一项在去掉排除项之后是否还要处理，和结果一一对应。
+    fn remaining(&self, excluded: &[usize]) -> Vec<bool> {
+        let excluded = excluded.iter().copied().collect::<HashSet<_>>();
+        match self {
+            Found::Empty(dirs) => {
+                let skipped = excluded
+                    .iter()
+                    .filter_map(|index| dirs.get(*index))
+                    .map(|dir| dir.path.as_path())
+                    .collect::<HashSet<_>>();
+                let ancestors = skipped
+                    .iter()
+                    .flat_map(|path| path.ancestors())
+                    .collect::<HashSet<_>>();
+                dirs.iter()
+                    .map(|dir| {
+                        !ancestors.contains(dir.path.as_path())
+                            && !dir.path.ancestors().any(|path| skipped.contains(path))
+                    })
+                    .collect()
+            }
+            Found::Flatten(plans) => (0..plans.len())
+                .map(|index| !excluded.contains(&index))
+                .collect(),
+        }
+    }
+}
+
+fn select<T: Clone>(items: &[T], remaining: &[bool]) -> Vec<T> {
+    items
+        .iter()
+        .zip(remaining)
+        .filter(|(_, keep)| **keep)
+        .map(|(item, _)| item.clone())
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +139,18 @@ pub struct ScanOutcome {
     pub stats: ScanStats,
     pub elapsed: Duration,
     pub found: Found,
+}
+
+impl ScanOutcome {
+    pub fn without(&self, excluded: &[usize]) -> ScanOutcome {
+        ScanOutcome {
+            root: self.root.clone(),
+            task: self.task,
+            stats: self.stats,
+            elapsed: self.elapsed,
+            found: self.found.without(excluded),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -356,6 +431,73 @@ mod tests {
         assert_eq!(applied[1].report.removed_dirs, vec![b.join("z")]);
         assert!(!a.join("x").exists());
         assert!(b.join("keep.txt").exists());
+    }
+
+    #[test]
+    fn excluding_an_empty_dir_keeps_it_with_subdirs_and_ancestors() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("a").join("b").join("c")).unwrap();
+        fs::create_dir_all(root.join("other")).unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let outcome = scan_root(
+            0,
+            root,
+            Task::Empty,
+            &ScanOptions::default(),
+            &cancel,
+            &|_, _| {},
+        )
+        .unwrap();
+        let Found::Empty(dirs) = &outcome.found else {
+            panic!("expected empty dirs");
+        };
+        let b = dirs
+            .iter()
+            .position(|dir| dir.path == root.join("a").join("b"))
+            .unwrap();
+
+        let trimmed = outcome.without(&[b]);
+        assert_eq!(engine_paths(&trimmed.found), vec![root.join("other")]);
+        assert_eq!(outcome.found.tally_without(&[b]), (1, 0));
+
+        // SAFETY: 单个测试内设置，测试只读取这个变量。
+        unsafe { std::env::set_var("TIDYFS_JOURNAL_DIR", temp.path().join("journals")) };
+        apply_root(0, &trimmed, &ScanOptions::default(), &cancel, &|_, _| {});
+        assert!(root.join("a").join("b").join("c").exists());
+        assert!(!root.join("other").exists());
+    }
+
+    #[test]
+    fn excluding_a_flatten_plan_leaves_it_alone() {
+        let temp = tempdir().unwrap();
+        let date = temp.path().join("20250101");
+        fs::create_dir_all(date.join("a").join("shell")).unwrap();
+        fs::create_dir_all(date.join("b").join("shell")).unwrap();
+        fs::write(date.join("a").join("shell").join("a.jpg"), "a").unwrap();
+        fs::write(date.join("b").join("shell").join("b.jpg"), "b").unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let task = Task::Flatten(FlattenMode::KeepEndpoints);
+        let outcome =
+            scan_root(0, &date, task, &ScanOptions::default(), &cancel, &|_, _| {}).unwrap();
+        assert_eq!(outcome.found.len(), 2);
+        let trimmed = outcome.without(&[0]);
+        assert_eq!(trimmed.found.len(), 1);
+        assert_eq!(outcome.found.tally_without(&[0]), (1, 1));
+        assert_eq!(outcome.found.tally_without(&[]), (2, 2));
+        assert_eq!(
+            engine_paths(&trimmed.found),
+            vec![date.join("b").join("shell")]
+        );
+    }
+
+    fn engine_paths(found: &Found) -> Vec<PathBuf> {
+        match found {
+            Found::Empty(dirs) => dirs.iter().map(|dir| dir.path.clone()).collect(),
+            Found::Flatten(plans) => plans.iter().map(|plan| plan.source_dir.clone()).collect(),
+        }
     }
 
     #[test]

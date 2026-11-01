@@ -50,10 +50,18 @@ pub enum Request {
     Apply {
         scan: u64,
         roots: Vec<usize>,
+        /// 用户在预览里排除的项，序号对应扫描结果里的 `items`。
+        #[serde(default)]
+        exclude: Vec<Exclusion>,
     },
     Export {
         scan: u64,
         root: usize,
+    },
+    /// 按完整扫描结果计算排除之后还剩多少（预览只带前几千项，界面算不准）。
+    Tally {
+        scan: u64,
+        exclude: Vec<Exclusion>,
     },
     Cancel {
         job: u64,
@@ -61,6 +69,12 @@ pub enum Request {
     Forget {
         scan: u64,
     },
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Exclusion {
+    pub root: usize,
+    pub items: Vec<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -109,6 +123,9 @@ pub enum Message {
     },
     Exported {
         path: String,
+    },
+    Tally {
+        roots: Vec<RootTally>,
     },
     Ok,
     Error {
@@ -176,6 +193,14 @@ pub struct RootApply {
     pub journal: Option<String>,
     pub cancelled: bool,
     pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RootTally {
+    pub root: usize,
+    pub count: usize,
+    pub file_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -294,6 +319,22 @@ mod tests {
         let envelope: Envelope =
             serde_json::from_str(r#"{"id":4,"cmd":"apply","scan":3,"roots":[0,1]}"#).unwrap();
         assert!(matches!(envelope.request, Request::Apply { scan: 3, .. }));
+
+        let envelope: Envelope = serde_json::from_str(
+            r#"{"id":5,"cmd":"apply","scan":3,"roots":[0],"exclude":[{"root":0,"items":[2,5]}]}"#,
+        )
+        .unwrap();
+        let Request::Apply { exclude, .. } = envelope.request else {
+            panic!("expected apply");
+        };
+        assert_eq!(exclude[0].root, 0);
+        assert_eq!(exclude[0].items, vec![2, 5]);
+
+        let envelope: Envelope = serde_json::from_str(
+            r#"{"id":6,"cmd":"tally","scan":3,"exclude":[{"root":1,"items":[0]}]}"#,
+        )
+        .unwrap();
+        assert!(matches!(envelope.request, Request::Tally { scan: 3, .. }));
     }
 
     #[test]
